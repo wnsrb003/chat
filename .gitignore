@@ -5,7 +5,6 @@ __pycache__/
 *.so
 .Python
 env/
-afreecatv-chat-crawler/venv/
 python-worker/venv/
 ENV/
 build/
