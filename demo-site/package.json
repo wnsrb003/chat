@@ -1,0 +1,11 @@
+{
+  "name": "chat-translation-demo",
+  "version": "1.0.0",
+  "description": "Demo site for chat translation service",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "author": "",
+  "license": "MIT"
+}

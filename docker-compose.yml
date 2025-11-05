@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"  # HTTP/WebSocket
+      - "50051:50051"  # gRPC
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PORT=3000
+      - GRPC_PORT=50051
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  python-worker:
+    build:
+      context: ./python-worker
+      dockerfile: Dockerfile
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - VLLM_URL=http://192.168.190.143:8000/v1/chat/completions
+      - WORKER_CONCURRENCY=4
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      replicas: 2  # 워커 2개 실행
+
+volumes:
+  redis-data:

@@ -1,0 +1,116 @@
+syntax = "proto3";
+
+package translation;
+
+// Translation service definition
+service TranslationService {
+    // Translate a single text
+    rpc Translate(TranslateRequest) returns (TranslateResponse);
+    
+    // Translate multiple texts in batch
+    rpc BatchTranslate(BatchTranslateRequest) returns (BatchTranslateResponse);
+    
+    // Get cache statistics
+    rpc GetCacheStats(CacheStatsRequest) returns (CacheStatsResponse);
+    
+    // Clear cache
+    rpc ClearCache(ClearCacheRequest) returns (ClearCacheResponse);
+    
+    // Health check
+    rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// Single translation request
+message TranslateRequest {
+    string text = 1;
+    string source_lang = 2;
+    repeated string target_langs = 3;  // Multiple target languages
+    bool use_cache = 4;
+    string cache_strategy = 5;  // "exact", "normalized", "semantic", "hybrid"
+    string translator_name = 6;  // optional specific translator
+}
+
+// Single translation response
+message TranslateResponse {
+    string original_text = 1;
+    string source_lang = 2;
+    map<string, string> translations = 3;  // target_lang -> translation
+    map<string, bool> cache_hits = 4;      // target_lang -> cache_hit
+    double processing_time_ms = 5;
+    bool success = 6;
+    string error_message = 7;
+}
+
+// Batch translation request
+message BatchTranslateRequest {
+    repeated TranslateRequest requests = 1;
+}
+
+// Batch translation response
+message BatchTranslateResponse {
+    repeated TranslateResponse responses = 1;
+    double total_processing_time_ms = 2;
+    int32 success_count = 3;
+    int32 error_count = 4;
+}
+
+// Cache statistics request
+message CacheStatsRequest {
+    // Empty for now, can add filters later
+}
+
+// Cache statistics response
+message CacheStatsResponse {
+    int32 exact_size = 1;
+    int32 normalized_size = 2;
+    int32 semantic_size = 3;
+    int32 exact_hits = 4;
+    int32 normalized_hits = 5;
+    int32 semantic_hits = 6;
+    int32 total_hits = 7;
+    int32 total_misses = 8;
+    int32 total_requests = 9;
+    double hit_rate = 10;
+    map<string, CacheTypeStats> detailed_stats = 11;
+}
+
+// Detailed cache statistics for each cache type
+message CacheTypeStats {
+    int32 cache_size = 1;
+    int32 total_requests = 2;
+    int32 total_hits = 3;
+    int32 total_misses = 4;
+    double hit_rate = 5;
+    map<string, LanguageStats> by_language = 6;
+}
+
+// Per-language statistics
+message LanguageStats {
+    int32 requests = 1;
+    int32 hits = 2;
+    int32 misses = 3;
+    double hit_rate = 4;
+}
+
+// Clear cache request
+message ClearCacheRequest {
+    string cache_type = 1;  // "all", "exact", "normalized", "semantic"
+}
+
+// Clear cache response
+message ClearCacheResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+// Health check request
+message HealthCheckRequest {
+    // Empty
+}
+
+// Health check response
+message HealthCheckResponse {
+    bool healthy = 1;
+    string status = 2;
+    map<string, string> details = 3;
+}

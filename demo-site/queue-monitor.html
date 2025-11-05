@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bull Queue Monitor - Translation Service</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1600px;
+      margin: 0 auto;
+    }
+
+    .header {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    }
+
+    .header h1 {
+      font-size: 28px;
+      color: #2d3748;
+      margin-bottom: 8px;
+    }
+
+    .header .subtitle {
+      color: #718096;
+      font-size: 14px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .stat-card {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .stat-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    }
+
+    .stat-card .label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #718096;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    .stat-card .value {
+      font-size: 32px;
+      font-weight: 700;
+      color: #2d3748;
+      line-height: 1;
+    }
+
+    .stat-card .unit {
+      font-size: 14px;
+      color: #a0aec0;
+      margin-top: 4px;
+    }
+
+    .stat-card.waiting { border-left: 4px solid #f59e0b; }
+    .stat-card.active { border-left: 4px solid #3b82f6; }
+    .stat-card.completed { border-left: 4px solid #10b981; }
+    .stat-card.failed { border-left: 4px solid #ef4444; }
+    .stat-card.performance { border-left: 4px solid #8b5cf6; }
+    .stat-card.stuck { border-left: 4px solid #dc2626; background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); }
+
+    .jobs-section {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    @media (max-width: 1200px) {
+      .jobs-section {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .job-card {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    }
+
+    .job-card h2 {
+      font-size: 18px;
+      color: #2d3748;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid #e2e8f0;
+    }
+
+    .job-list {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .job-item {
+      background: #f7fafc;
+      border-left: 3px solid #cbd5e0;
+      padding: 12px;
+      margin-bottom: 8px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    .job-item.waiting { border-left-color: #f59e0b; }
+    .job-item.active { border-left-color: #3b82f6; }
+    .job-item.failed { border-left-color: #ef4444; }
+    .job-item.completed { border-left-color: #10b981; }
+    .job-item.stuck { border-left-color: #dc2626; background: #fee2e2; }
+
+    .job-item .job-id {
+      font-family: monospace;
+      color: #4a5568;
+      font-size: 11px;
+      margin-bottom: 6px;
+    }
+
+    .job-item .job-text {
+      color: #2d3748;
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
+
+    .job-item .job-meta {
+      color: #718096;
+      font-size: 11px;
+    }
+
+    .job-item .job-error {
+      color: #dc2626;
+      background: #fee2e2;
+      padding: 6px 8px;
+      border-radius: 4px;
+      margin-top: 6px;
+      font-size: 11px;
+    }
+
+    .empty-state {
+      text-align: center;
+      color: #a0aec0;
+      padding: 40px 20px;
+      font-size: 14px;
+    }
+
+    .refresh-info {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+      color: #718096;
+      font-size: 13px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    }
+
+    .refresh-info .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      background: #10b981;
+      border-radius: 50%;
+      margin-right: 8px;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .chart-container {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    }
+
+    .chart-container h2 {
+      font-size: 18px;
+      color: #2d3748;
+      margin-bottom: 16px;
+    }
+
+    .bottleneck-alert {
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+      border-left: 4px solid #f59e0b;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 20px;
+      display: none;
+    }
+
+    .bottleneck-alert.active {
+      display: block;
+    }
+
+    .bottleneck-alert h3 {
+      color: #92400e;
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+
+    .bottleneck-alert p {
+      color: #78350f;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .job-list::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .job-list::-webkit-scrollbar-track {
+      background: #f1f5f9;
+      border-radius: 4px;
+    }
+
+    .job-list::-webkit-scrollbar-thumb {
+      background: #cbd5e0;
+      border-radius: 4px;
+    }
+
+    .job-list::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🚀 Bull Queue Monitor</h1>
+      <p class="subtitle">Translation Service - Real-time Queue Statistics</p>
+    </div>
+
+    <div class="bottleneck-alert" id="bottleneckAlert">
+      <h3>⚠️ Bottleneck Detected</h3>
+      <p id="bottleneckMessage"></p>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card waiting">
+        <div class="label">⏳ Waiting</div>
+        <div class="value" id="waitingCount">-</div>
+        <div class="unit">jobs in queue</div>
+      </div>
+
+      <div class="stat-card active">
+        <div class="label">⚡ Active</div>
+        <div class="value" id="activeCount">-</div>
+        <div class="unit">jobs processing</div>
+      </div>
+
+      <div class="stat-card completed">
+        <div class="label">✅ Completed</div>
+        <div class="value" id="completedCount">-</div>
+        <div class="unit">total completed</div>
+      </div>
+
+      <div class="stat-card failed">
+        <div class="label">❌ Failed</div>
+        <div class="value" id="failedCount">-</div>
+        <div class="unit">total failed</div>
+      </div>
+
+      <div class="stat-card performance">
+        <div class="label">⚡ Speed</div>
+        <div class="value" id="jobsPerSecond">-</div>
+        <div class="unit">jobs/second</div>
+      </div>
+
+      <div class="stat-card performance">
+        <div class="label">⏱️ Avg Time</div>
+        <div class="value" id="avgTime">-</div>
+        <div class="unit">milliseconds</div>
+      </div>
+
+      <div class="stat-card stuck">
+        <div class="label">🚨 Stuck</div>
+        <div class="value" id="stuckCount">-</div>
+        <div class="unit">jobs stuck</div>
+      </div>
+    </div>
+
+    <div class="jobs-section">
+      <div class="job-card">
+        <h2>🚨 Stuck Active Jobs (<span id="stuckActiveCount">0</span>)</h2>
+        <div class="job-list" id="stuckActiveJobs">
+          <div class="empty-state">No stuck active jobs</div>
+        </div>
+      </div>
+
+      <div class="job-card">
+        <h2>🚨 Stuck Waiting Jobs (<span id="stuckWaitingCount">0</span>)</h2>
+        <div class="job-list" id="stuckWaitingJobs">
+          <div class="empty-state">No stuck waiting jobs</div>
+        </div>
+      </div>
+
+      <div class="job-card">
+        <h2>⏳ Waiting Jobs (<span id="waitingJobsCount">0</span>)</h2>
+        <div class="job-list" id="waitingJobs">
+          <div class="empty-state">No jobs waiting</div>
+        </div>
+      </div>
+
+      <div class="job-card">
+        <h2>⚡ Active Jobs (<span id="activeJobsCount">0</span>)</h2>
+        <div class="job-list" id="activeJobs">
+          <div class="empty-state">No jobs processing</div>
+        </div>
+      </div>
+
+      <div class="job-card">
+        <h2>❌ Failed Jobs (<span id="failedJobsCount">0</span>)</h2>
+        <div class="job-list" id="failedJobs">
+          <div class="empty-state">No failed jobs</div>
+        </div>
+      </div>
+
+      <div class="job-card">
+        <h2>✅ Recently Completed (<span id="completedJobsCount">0</span>)</h2>
+        <div class="job-list" id="completedJobs">
+          <div class="empty-state">No completed jobs yet</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="refresh-info">
+      <span class="dot"></span>
+      Auto-refreshing every 2 seconds
+    </div>
+  </div>
+
+  <script>
+    const API_URL = 'http://localhost:3000/api/v1/queue/stats';
+    let previousData = null;
+
+    async function fetchStats() {
+      try {
+        const response = await fetch(API_URL);
+        const result = await response.json();
+
+        if (result.success) {
+          updateStats(result.data);
+          checkBottlenecks(result.data);
+        }
+      } catch (error) {
+        console.error('Failed to fetch stats:', error);
+      }
+    }
+
+    function updateStats(data) {
+      // Update counts
+      document.getElementById('waitingCount').textContent = data.counts.waiting;
+      document.getElementById('activeCount').textContent = data.counts.active;
+      document.getElementById('completedCount').textContent = data.counts.completed;
+      document.getElementById('failedCount').textContent = data.counts.failed;
+      document.getElementById('stuckCount').textContent = data.stuck?.totalStuck || 0;
+
+      // Update performance metrics
+      const throughputPerMinute = data.performance.throughputPerMinute || 0;
+      const jobsPerSecond = throughputPerMinute / 60;
+      document.getElementById('jobsPerSecond').textContent = jobsPerSecond.toFixed(2);
+      document.getElementById('avgTime').textContent = data.performance.avgProcessingTimeMs || 0;
+
+      // Update stuck job lists
+      updateStuckJobList('stuckActiveJobs', 'stuckActiveCount', data.stuck?.stuckActiveJobs || [], 'stuck-active');
+      updateStuckJobList('stuckWaitingJobs', 'stuckWaitingCount', data.stuck?.stuckWaitingJobs || [], 'stuck-waiting');
+
+      // Update job lists
+      updateJobList('waitingJobs', 'waitingJobsCount', data.waitingJobs || [], 'waiting');
+      updateJobList('activeJobs', 'activeJobsCount', data.activeJobs || [], 'active');
+      updateJobList('failedJobs', 'failedJobsCount', data.recentFailed || [], 'failed');
+      updateJobList('completedJobs', 'completedJobsCount', data.recentCompleted || [], 'completed');
+
+      previousData = data;
+    }
+
+    function updateStuckJobList(elementId, countId, jobs, type) {
+      const container = document.getElementById(elementId);
+      const countElement = document.getElementById(countId);
+
+      countElement.textContent = jobs.length;
+
+      if (jobs.length === 0) {
+        container.innerHTML = `<div class="empty-state">No ${type} jobs</div>`;
+        return;
+      }
+
+      container.innerHTML = jobs.map(job => {
+        let metaInfo = '';
+
+        if (type === 'stuck-active') {
+          metaInfo = `🔥 Stuck for ${job.stuckForSeconds}s (started ${Math.round(job.elapsedMs / 1000)}s ago)`;
+        } else if (type === 'stuck-waiting') {
+          metaInfo = `⏰ Waiting for ${job.waitingForSeconds}s`;
+        }
+
+        return `
+          <div class="job-item stuck">
+            <div class="job-id">ID: ${job.id}</div>
+            <div class="job-text">${escapeHtml(job.text || 'N/A')}</div>
+            <div class="job-meta">${metaInfo}</div>
+            <div class="job-meta">Target: ${(job.targetLanguages || []).join(', ')}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function updateJobList(elementId, countId, jobs, type) {
+      const container = document.getElementById(elementId);
+      const countElement = document.getElementById(countId);
+
+      countElement.textContent = jobs.length;
+
+      if (jobs.length === 0) {
+        container.innerHTML = `<div class="empty-state">No ${type} jobs</div>`;
+        return;
+      }
+
+      container.innerHTML = jobs.map(job => {
+        let metaInfo = '';
+        let errorInfo = '';
+
+        if (type === 'waiting') {
+          const waitTime = job.waitingMs || 0;
+          metaInfo = `Waiting for ${Math.round(waitTime / 1000)}s`;
+        } else if (type === 'active') {
+          const processingTime = job.elapsedMs || 0;
+          metaInfo = `Processing for ${Math.round(processingTime / 1000)}s`;
+        } else if (type === 'failed') {
+          metaInfo = job.finishedOn ? `Failed at ${new Date(job.finishedOn).toLocaleTimeString()}` : '';
+          errorInfo = job.error ? `<div class="job-error">${escapeHtml(job.error)}</div>` : '';
+        } else if (type === 'completed') {
+          metaInfo = `Processed in ${job.processingTimeMs}ms`;
+        }
+
+        return `
+          <div class="job-item ${type}">
+            <div class="job-id">ID: ${job.id}</div>
+            <div class="job-text">${escapeHtml(job.text || 'N/A')}</div>
+            <div class="job-meta">${metaInfo}</div>
+            ${errorInfo}
+          </div>
+        `;
+      }).join('');
+    }
+
+    function checkBottlenecks(data) {
+      const alert = document.getElementById('bottleneckAlert');
+      const message = document.getElementById('bottleneckMessage');
+      const bottlenecks = [];
+
+      // Check stuck jobs
+      if (data.stuck?.totalStuck > 0) {
+        bottlenecks.push(`🚨 CRITICAL: ${data.stuck.totalStuck} jobs are stuck (${data.stuck.activeCount} active, ${data.stuck.waitingCount} waiting). Check worker status immediately!`);
+      }
+
+      // Check if waiting queue is growing
+      if (data.counts.waiting > 50) {
+        bottlenecks.push(`High number of waiting jobs (${data.counts.waiting}). Consider increasing worker concurrency.`);
+      }
+
+      // Check if processing is slow
+      if (data.performance.avgProcessingTimeMs > 5000) {
+        bottlenecks.push(`Slow processing time (${data.performance.avgProcessingTimeMs}ms average). Check worker performance.`);
+      }
+
+      // Check if too many active jobs
+      if (data.counts.active > 20) {
+        bottlenecks.push(`Many jobs stuck in active state (${data.counts.active}). Workers might be overwhelmed.`);
+      }
+
+      // Check failure rate
+      const totalProcessed = data.counts.completed + data.counts.failed;
+      if (totalProcessed > 0) {
+        const failureRate = (data.counts.failed / totalProcessed) * 100;
+        if (failureRate > 10) {
+          bottlenecks.push(`High failure rate (${failureRate.toFixed(1)}%). Check logs for errors.`);
+        }
+      }
+
+      if (bottlenecks.length > 0) {
+        alert.classList.add('active');
+        message.innerHTML = bottlenecks.map(b => `• ${b}`).join('<br>');
+      } else {
+        alert.classList.remove('active');
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Initial fetch
+    fetchStats();
+
+    // Auto-refresh every 2 seconds
+    setInterval(fetchStats, 2000);
+  </script>
+</body>
+</html>

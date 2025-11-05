@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>실시간 채팅 번역 - AfreecaTV Style</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="main-wrapper">
+        <!-- 왼쪽: 번역 설정 -->
+        <div class="translation-panel">
+          <div class="controls-section">
+            <div class="panel-header">
+              <h2>⚙️ 번역 설정</h2>
+              <div id="status" class="status disconnected">연결 중...</div>
+            </div>
+
+            <div class="chat-selector">
+              <label>채팅 데이터셋 (하나만 선택):</label>
+              <div class="chat-buttons">
+                <button class="chat-btn active" data-chat="origin">
+                  원본 채팅
+                </button>
+                <button class="chat-btn" data-chat="rag">rag 용 채팅</button>
+              </div>
+            </div>
+
+            <div class="lang-selector">
+              <label>번역 언어 (하나만 선택):</label>
+              <div class="lang-buttons">
+                <button class="lang-btn active" data-lang="">🇺🇸 English</button>
+                <button class="lang-btn" data-lang="th">🇹🇭 ไทย</button>
+                <button class="lang-btn" data-lang="zh-CN">🇨🇳 简体</button>
+                <button class="lang-btn" data-lang="zh-TW">🇹🇼 繁體</button>
+              </div>
+            </div>
+
+            <div class="options">
+              <label class="option-item">
+                <input type="checkbox" id="expandAbbr" checked />
+                <span>축약어/신조어 확장 (ㅇㅈ→인정, 레게노→레전드)</span>
+              </label>
+              <label class="option-item">
+                <input type="checkbox" id="normalizeRepeats" checked />
+                <span>반복 문자 정규화 (ㅋㅋㅋ→ㅋㅋ)</span>
+              </label>
+              <label class="option-item">
+                <input type="checkbox" id="removeEmoticons" checked />
+                <span>이모티콘 제거 (/웃음/)</span>
+              </label>
+              <label class="option-item">
+                <input type="checkbox" id="fixTypos" checked />
+                <span>맞춤법 교정 (되요→돼요, 됬어→됐어)</span>
+              </label>
+              <label class="option-item">
+                <input type="checkbox" id="addSpacing" checked />
+                <span>띄어쓰기 교정 (AI 기반, ~6ms)</span>
+              </label>
+              <label class="option-item">
+                <input type="checkbox" id="filterProfanity" />
+                <span>욕설 필터링</span>
+              </label>
+            </div>
+
+            <div class="action-buttons">
+              <button class="action-btn simulate" id="simulateBtn">
+                ▶ 채팅 시작
+              </button>
+              <button class="action-btn start" id="startBtn" disabled>
+                🌐 번역 시작
+              </button>
+              <button class="action-btn stop" id="stopBtn" disabled>
+                ⏸ 정지
+              </button>
+              <button class="action-btn clear" id="clearBtn">🗑 초기화</button>
+            </div>
+
+            <div class="speed-control">
+              <label for="speedSlider">채팅 속도:</label>
+              <input
+                type="range"
+                id="speedSlider"
+                min="50"
+                max="2000"
+                value="500"
+                step="50"
+              />
+              <span id="speedValue">500ms</span>
+            </div>
+
+            <div class="stats-info">
+              <div class="stat-item">
+                <span class="stat-label">번역 완료:</span>
+                <span class="stat-value" id="translatedCount">0</span>
+              </div>
+              <div class="stat-item">
+                <span class="stat-label">평균 시간:</span>
+                <span class="stat-value" id="avgTime">0ms</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 오른쪽: 채팅 + 번역 결과 -->
+        <div class="chat-panel">
+          <div class="panel-header">
+            <h2>💬 채팅 (원본 + 번역)</h2>
+            <div class="stats"><span id="totalChats">0</span>개 메시지</div>
+          </div>
+          <div class="chat-container" id="originalChat">
+            <div class="loading-message">채팅 시작 버튼을 눌러주세요</div>
+          </div>
+          <div class="chat-input-container">
+            <input
+              type="text"
+              id="chatInput"
+              class="chat-input"
+              placeholder="직접 채팅을 입력하세요..."
+              maxlength="500"
+            />
+            <button id="sendChatBtn" class="send-chat-btn">전송</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="chat-data.js"></script>
+    <script src="service-chat-data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
