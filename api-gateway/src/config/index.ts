@@ -29,6 +29,11 @@ export const config = {
   },
 
   logging: {
-    level: process.env.LOG_LEVEL || "info",
+    level: process.env.LOG_LEVEL || "warn", // info → warn (CPU 절약)
+  },
+
+  cacheService: {
+    grpcUrl: process.env.CACHE_SERVICE_GRPC_URL || "192.168.190.158:50051",
+    timeout: parseInt(process.env.CACHE_SERVICE_TIMEOUT || "30000", 10),
   },
 } as const;

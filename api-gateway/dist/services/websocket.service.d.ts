@@ -5,6 +5,10 @@ export declare class WebSocketService {
     constructor(server: Server);
     private setupWebSocketServer;
     private handleMessage;
+    /**
+     * 각 언어를 완전히 독립적으로 처리 (전처리 + 번역)
+     */
+    private processLanguageIndependentlyForWebSocket;
     broadcast(message: any): void;
     close(): void;
 }

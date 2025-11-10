@@ -10,12 +10,23 @@ const logger_1 = require("../utils/logger");
 const ioredis_1 = __importDefault(require("ioredis"));
 class QueueService {
     queue;
+    preprocessingResults = new Map();
+    preprocessingResolvers = new Map();
     constructor() {
         this.queue = new bull_1.default(config_1.config.queue.name, {
-            redis: {
-                host: config_1.config.redis.host,
-                port: config_1.config.redis.port,
-                password: config_1.config.redis.password,
+            // Bull이 Redis 클라이언트를 생성할 때 호출 (client, bclient, eclient 총 3개)
+            createClient: (type) => {
+                const client = new ioredis_1.default({
+                    host: config_1.config.redis.host,
+                    port: config_1.config.redis.port,
+                    password: config_1.config.redis.password,
+                    maxRetriesPerRequest: null, // Bull 권장 설정 (blocking 명령용)
+                    enableReadyCheck: false, // 성능 향상
+                    lazyConnect: false, // 즉시 연결
+                    // ioredis는 단일 연결이지만 Bull이 3개(client, bclient, eclient) 생성
+                });
+                logger_1.logger.debug(`Bull Redis client created: ${type}`);
+                return client;
             },
             defaultJobOptions: {
                 removeOnComplete: 100, // Keep last 100 completed jobs
@@ -50,32 +61,82 @@ class QueueService {
             host: config_1.config.redis.host,
             port: config_1.config.redis.port,
             password: config_1.config.redis.password,
+            maxRetriesPerRequest: null,
+            enableReadyCheck: false,
+            lazyConnect: false,
         });
-        const CHANNEL = "bull:translation-results:completed:jobId";
-        // 구독
-        redisSub.subscribe(CHANNEL, async (err, count) => {
+        // 전처리 결과 채널 구독
+        const PREPROCESSING_CHANNEL = "bull:preprocessing-results:jobId";
+        redisSub.subscribe(PREPROCESSING_CHANNEL, async (err, count) => {
             if (err) {
-                console.error("Failed to subscribe: ", err);
+                logger_1.logger.error({ err }, "Failed to subscribe to preprocessing channel");
                 return;
             }
-            logger_1.logger.info(`Subscribed to ${CHANNEL} (${count} channels)`);
+            logger_1.logger.info(`Subscribed to ${PREPROCESSING_CHANNEL} (${count} channels)`);
         });
         redisSub.on("message", async (channel, message) => {
-            logger_1.logger.info(`Received message on channel ${channel}: ${message}`);
-            if (channel !== CHANNEL)
+            if (channel !== PREPROCESSING_CHANNEL)
                 return;
             try {
-                const { jobId, result } = JSON.parse(message);
-                const job = await exports.queueService.getJob(jobId);
-                if (!job) {
-                    console.warn(`Job ${jobId} not found`);
-                    return;
+                const { jobId, result, status } = JSON.parse(message);
+                logger_1.logger.debug({
+                    msg: "Preprocessing result received",
+                    jobId,
+                    status,
+                });
+                if (status === "completed") {
+                    // 전처리 결과 저장
+                    this.preprocessingResults.set(jobId, result);
+                    // Bull job을 completed로 마킹 (통계 업데이트를 위해)
+                    const job = await this.getJob(jobId);
+                    if (job) {
+                        await job
+                            .moveToCompleted(JSON.stringify({
+                            preprocessing: result,
+                            completed_at: Date.now(),
+                        }), true, true)
+                            .catch((error) => {
+                            // 이미 completed 상태이거나 타이밍 이슈로 실패할 수 있음 (무시해도 됨)
+                            logger_1.logger.debug({ error, jobId }, "Job already completed or moved");
+                        });
+                    }
+                    // 대기 중인 resolver가 있으면 호출
+                    const resolver = this.preprocessingResolvers.get(jobId);
+                    if (resolver) {
+                        resolver(result);
+                        this.preprocessingResolvers.delete(jobId);
+                    }
                 }
-                await exports.queueService.completeJob(jobId, result, "");
-                console.log(`✅ Job ${jobId} marked as completed via Python message`);
+                else if (status === "failed") {
+                    // Bull job을 failed로 마킹
+                    const job = await this.getJob(jobId);
+                    if (job) {
+                        await job
+                            .moveToFailed({ message: result?.filter_reason || "Preprocessing failed" }, true)
+                            .catch((error) => {
+                            // 이미 failed 상태이거나 타이밍 이슈로 실패할 수 있음 (무시해도 됨)
+                            logger_1.logger.debug({ error, jobId }, "Job already failed or moved");
+                        });
+                    }
+                    // 실패 시 resolver에게 에러 전달
+                    const resolver = this.preprocessingResolvers.get(jobId);
+                    if (resolver) {
+                        // reject는 따로 관리하지 않으므로, filtered=true로 처리
+                        const failedResult = {
+                            original_text: "",
+                            preprocessed_text: "",
+                            detected_language: "unknown",
+                            preprocessing_time_ms: 0,
+                            filtered: true,
+                            filter_reason: result?.filter_reason || "Preprocessing failed",
+                        };
+                        resolver(failedResult);
+                        this.preprocessingResolvers.delete(jobId);
+                    }
+                }
             }
             catch (err) {
-                console.error("Error processing Python completion message:", err);
+                logger_1.logger.error({ err }, "Error processing Python preprocessing message");
             }
         });
     }
@@ -92,13 +153,32 @@ class QueueService {
     }
     async waitForResult(jobId, timeout = config_1.config.queue.timeout) {
         const job = await this.getJob(jobId);
-        logger_1.logger.info({ jobId, job }, "Waiting for result");
+        // logger.info({ jobId, job }, "Waiting for result");
+        // console.log(job, jobId, "@@@");
         if (!job) {
             throw new Error(`Job ${jobId} not found`);
         }
         return Promise.race([
             job.finished(),
             new Promise((_, reject) => setTimeout(() => reject(new Error("Job timeout")), timeout)),
+        ]);
+    }
+    /**
+     * 전처리 결과 대기
+     */
+    async waitForPreprocessing(jobId, timeout = config_1.config.queue.timeout) {
+        // 이미 결과가 있으면 즉시 반환
+        const cached = this.preprocessingResults.get(jobId);
+        if (cached) {
+            this.preprocessingResults.delete(jobId); // 사용 후 삭제
+            return cached;
+        }
+        // Promise로 대기
+        return Promise.race([
+            new Promise((resolve) => {
+                this.preprocessingResolvers.set(jobId, resolve);
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Preprocessing timeout")), timeout)),
         ]);
     }
     async getQueueStats() {
@@ -118,21 +198,140 @@ class QueueService {
             total: waiting + active + completed + failed + delayed,
         };
     }
+    async getDetailedStats() {
+        const [waiting, active, completed, failed, delayed, paused, activeJobs, waitingJobs, completedJobs, failedJobs,] = await Promise.all([
+            this.queue.getWaitingCount(),
+            this.queue.getActiveCount(),
+            this.queue.getCompletedCount(),
+            this.queue.getFailedCount(),
+            this.queue.getDelayedCount(),
+            this.queue.getPausedCount(),
+            this.queue.getActive(0, 50), // 최대 50개 active jobs 확인
+            this.queue.getWaiting(0, 50), // 최대 50개 waiting jobs 확인
+            this.queue.getCompleted(0, 10), // 최근 10개 completed jobs
+            this.queue.getFailed(0, 10), // 최근 10개 failed jobs
+        ]);
+        const now = Date.now();
+        // Stuck 판단 기준 (ms) - 전처리 전용으로 조정
+        const ACTIVE_STUCK_THRESHOLD = 5000; // 5초 이상 처리 중 (전처리는 빠름)
+        const WAITING_STUCK_THRESHOLD = 10000; // 10초 이상 대기
+        // Stuck active jobs (처리 중인데 너무 오래 걸리는 것들)
+        const stuckActiveJobs = activeJobs.filter((job) => {
+            const elapsedMs = job.processedOn ? now - job.processedOn : 0;
+            return elapsedMs > ACTIVE_STUCK_THRESHOLD;
+        });
+        // Stuck waiting jobs (대기 중인데 너무 오래 대기하는 것들)
+        const stuckWaitingJobs = waitingJobs.filter((job) => {
+            const waitingMs = now - job.timestamp;
+            return waitingMs > WAITING_STUCK_THRESHOLD;
+        });
+        // 처리 시간 통계 계산 (completed jobs 기준)
+        const processingTimes = completedJobs
+            .filter((job) => job.finishedOn && job.processedOn)
+            .map((job) => job.finishedOn - job.processedOn);
+        const avgProcessingTime = processingTimes.length > 0
+            ? processingTimes.reduce((a, b) => a + b, 0) / processingTimes.length
+            : 0;
+        // Throughput 계산 (최근 completed jobs 기준)
+        const recentCompletedJobs = completedJobs.filter((job) => job.finishedOn && now - job.finishedOn < 60000 // 최근 1분
+        );
+        const throughputPerMinute = recentCompletedJobs.length;
+        return {
+            counts: {
+                waiting,
+                active,
+                completed,
+                failed,
+                delayed,
+                paused,
+                total: waiting + active + completed + failed + delayed,
+            },
+            performance: {
+                avgProcessingTimeMs: Math.round(avgProcessingTime),
+                throughputPerMinute,
+            },
+            stuck: {
+                activeCount: stuckActiveJobs.length,
+                waitingCount: stuckWaitingJobs.length,
+                totalStuck: stuckActiveJobs.length + stuckWaitingJobs.length,
+                stuckActiveJobs: stuckActiveJobs.map((job) => ({
+                    id: job.id,
+                    text: job.data.text.substring(0, 50),
+                    targetLanguages: job.data.targetLanguages,
+                    startedAt: job.processedOn,
+                    elapsedMs: job.processedOn ? now - job.processedOn : 0,
+                    stuckForSeconds: job.processedOn
+                        ? Math.round((now - job.processedOn) / 1000)
+                        : 0,
+                })),
+                stuckWaitingJobs: stuckWaitingJobs.map((job) => ({
+                    id: job.id,
+                    text: job.data.text.substring(0, 50),
+                    targetLanguages: job.data.targetLanguages,
+                    createdAt: job.timestamp,
+                    waitingMs: now - job.timestamp,
+                    waitingForSeconds: Math.round((now - job.timestamp) / 1000),
+                })),
+            },
+            activeJobs: activeJobs.slice(0, 10).map((job) => ({
+                id: job.id,
+                text: job.data.text.substring(0, 50),
+                targetLanguages: job.data.targetLanguages,
+                startedAt: job.processedOn,
+                elapsedMs: job.processedOn ? now - job.processedOn : 0,
+            })),
+            waitingJobs: waitingJobs.slice(0, 10).map((job) => ({
+                id: job.id,
+                text: job.data.text.substring(0, 50),
+                targetLanguages: job.data.targetLanguages,
+                waitingMs: now - job.timestamp,
+            })),
+            recentCompleted: completedJobs.slice(0, 5).map((job) => ({
+                id: job.id,
+                text: job.data.text.substring(0, 50),
+                processingTimeMs: job.finishedOn && job.processedOn
+                    ? job.finishedOn - job.processedOn
+                    : 0,
+            })),
+            recentFailed: failedJobs.slice(0, 5).map((job) => ({
+                id: job.id,
+                text: job.data.text.substring(0, 50),
+                error: job.failedReason,
+            })),
+        };
+    }
     async completeJob(jobId, result, error) {
+        const now = performance.now();
         try {
             const job = await this.getJob(jobId);
+            if (!job)
+                return;
+            console.log(jobId, "completejob");
             if (error) {
-                await job?.moveToFailed({ message: error }, true);
-                console.log(`💥 Job ${jobId} failed: ${error}`);
+                await job.moveToFailed({ message: error }, true);
             }
             else {
-                await job?.moveToCompleted(JSON.stringify(result));
-                // console.log(`✅ Job ${jobId} completed`);
+                await job
+                    .moveToCompleted(JSON.stringify(result), true, true)
+                    .catch((error) => {
+                    console.log("completeJob moveToCompleted error", error);
+                });
             }
         }
         catch (error) {
+            console.log("completeJob error throw", performance.now() - now);
             logger_1.logger.error({ error }, "Failed to complete job");
-            // throw error;
+        }
+    }
+    async failedJob(jobId) {
+        try {
+            const job = await this.getJob(jobId);
+            if (!job)
+                return;
+            await job.moveToFailed({ message: "Job failed" }, true);
+        }
+        catch (error) {
+            logger_1.logger.error({ error }, "Failed to complete job");
         }
     }
     async close() {

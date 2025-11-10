@@ -1,4 +1,4 @@
-import { Job, JobOptions } from "bull";
+import Queue, { Job, JobOptions } from "bull";
 export interface TranslationJob {
     id: string;
     text: string;
@@ -22,14 +22,28 @@ export interface TranslationResult {
     filtered: boolean;
     filterReason?: string;
 }
+export interface PreprocessingResult {
+    original_text: string;
+    preprocessed_text: string;
+    detected_language: string;
+    preprocessing_time_ms: number;
+    filtered: boolean;
+    filter_reason?: string;
+}
 declare class QueueService {
     private queue;
+    private preprocessingResults;
+    private preprocessingResolvers;
     constructor();
     private setupEventHandlers;
     private subscribeToWorker;
     addJob(data: TranslationJob, options?: JobOptions): Promise<Job<TranslationJob>>;
     getJob(jobId: string): Promise<Job<TranslationJob> | null>;
     waitForResult(jobId: string, timeout?: number): Promise<TranslationResult>;
+    /**
+     * 전처리 결과 대기
+     */
+    waitForPreprocessing(jobId: string, timeout?: number): Promise<PreprocessingResult>;
     getQueueStats(): Promise<{
         waiting: number;
         active: number;
@@ -38,7 +52,67 @@ declare class QueueService {
         delayed: number;
         total: number;
     }>;
+    getDetailedStats(): Promise<{
+        counts: {
+            waiting: number;
+            active: number;
+            completed: number;
+            failed: number;
+            delayed: number;
+            paused: number;
+            total: number;
+        };
+        performance: {
+            avgProcessingTimeMs: number;
+            throughputPerMinute: number;
+        };
+        stuck: {
+            activeCount: number;
+            waitingCount: number;
+            totalStuck: number;
+            stuckActiveJobs: {
+                id: Queue.JobId;
+                text: string;
+                targetLanguages: string[];
+                startedAt: number | undefined;
+                elapsedMs: number;
+                stuckForSeconds: number;
+            }[];
+            stuckWaitingJobs: {
+                id: Queue.JobId;
+                text: string;
+                targetLanguages: string[];
+                createdAt: number;
+                waitingMs: number;
+                waitingForSeconds: number;
+            }[];
+        };
+        activeJobs: {
+            id: Queue.JobId;
+            text: string;
+            targetLanguages: string[];
+            startedAt: number | undefined;
+            elapsedMs: number;
+        }[];
+        waitingJobs: {
+            id: Queue.JobId;
+            text: string;
+            targetLanguages: string[];
+            waitingMs: number;
+        }[];
+        recentCompleted: {
+            id: Queue.JobId;
+            text: string;
+            processingTimeMs: number;
+        }[];
+        recentFailed: {
+            id: Queue.JobId;
+            text: string;
+            error: string | undefined;
+        }[];
+    }>;
     completeJob(jobId: string, result: TranslationResult, error: string): Promise<void>;
+    failedJob(jobId: string): Promise<void>;
     close(): Promise<void>;
 }
 export declare const queueService: QueueService;

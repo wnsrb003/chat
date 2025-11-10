@@ -22,5 +22,9 @@ export declare const config: {
     readonly logging: {
         readonly level: string;
     };
+    readonly cacheService: {
+        readonly grpcUrl: string;
+        readonly timeout: number;
+    };
 };
 //# sourceMappingURL=index.d.ts.map

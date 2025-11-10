@@ -300,7 +300,7 @@
       </div>
 
       <div class="stat-card performance">
-        <div class="label">⏱️ Avg Time</div>
+        <div class="label">⏱️ Avg Preprocessing</div>
         <div class="value" id="avgTime">-</div>
         <div class="unit">milliseconds</div>
       </div>
@@ -492,13 +492,13 @@
         bottlenecks.push(`High number of waiting jobs (${data.counts.waiting}). Consider increasing worker concurrency.`);
       }
 
-      // Check if processing is slow
-      if (data.performance.avgProcessingTimeMs > 5000) {
-        bottlenecks.push(`Slow processing time (${data.performance.avgProcessingTimeMs}ms average). Check worker performance.`);
+      // Check if preprocessing is slow (전처리는 빠름)
+      if (data.performance.avgProcessingTimeMs > 100) {
+        bottlenecks.push(`Slow preprocessing time (${data.performance.avgProcessingTimeMs}ms average). Check worker performance.`);
       }
 
-      // Check if too many active jobs
-      if (data.counts.active > 20) {
+      // Check if too many active jobs (전처리는 빠르므로 active가 많으면 문제)
+      if (data.counts.active > 10) {
         bottlenecks.push(`Many jobs stuck in active state (${data.counts.active}). Workers might be overwhelmed.`);
       }
 

@@ -28,8 +28,23 @@ export interface TranslationResult {
   filterReason?: string;
 }
 
+// 전처리 결과 인터페이스
+export interface PreprocessingResult {
+  original_text: string;
+  preprocessed_text: string;
+  detected_language: string;
+  preprocessing_time_ms: number;
+  filtered: boolean;
+  filter_reason?: string;
+}
+
 class QueueService {
   private queue: Queue.Queue<TranslationJob>;
+  private preprocessingResults: Map<string, PreprocessingResult> = new Map();
+  private preprocessingResolvers: Map<
+    string,
+    (result: PreprocessingResult) => void
+  > = new Map();
 
   constructor() {
     this.queue = new Queue<TranslationJob>(config.queue.name, {
@@ -90,34 +105,94 @@ class QueueService {
       enableReadyCheck: false,
       lazyConnect: false,
     });
-    const CHANNEL = "bull:translation-results:jobId";
-    // 구독
-    redisSub.subscribe(CHANNEL, async (err, count) => {
+
+    // 전처리 결과 채널 구독
+    const PREPROCESSING_CHANNEL = "bull:preprocessing-results:jobId";
+    redisSub.subscribe(PREPROCESSING_CHANNEL, async (err, count) => {
       if (err) {
-        console.error("Failed to subscribe: ", err);
+        logger.error({ err }, "Failed to subscribe to preprocessing channel");
         return;
       }
-      logger.info(`Subscribed to ${CHANNEL} (${count} channels)`);
+      logger.info(
+        `Subscribed to ${PREPROCESSING_CHANNEL} (${count} channels)`
+      );
     });
 
     redisSub.on("message", async (channel, message) => {
-      if (channel !== CHANNEL) return;
-      // const time = performance.now();
+      if (channel !== PREPROCESSING_CHANNEL) return;
 
       try {
-        console.log("message get", message);
         const { jobId, result, status } = JSON.parse(message);
-        // console.log("message json parse", performance.now() - time, result);
-        // getJob 생략 - result 받았으면 job 존재 확정
-        console.log("bull job", jobId, result, status);
+        logger.debug({
+          msg: "Preprocessing result received",
+          jobId,
+          status,
+        });
+
         if (status === "completed") {
-          await queueService.completeJob(jobId, result, "");
+          // 전처리 결과 저장
+          this.preprocessingResults.set(jobId, result);
+
+          // Bull job을 completed로 마킹 (통계 업데이트를 위해)
+          const job = await this.getJob(jobId);
+          if (job) {
+            await job
+              .moveToCompleted(
+                JSON.stringify({
+                  preprocessing: result,
+                  completed_at: Date.now(),
+                }),
+                true,
+                true
+              )
+              .catch((error) => {
+                // 이미 completed 상태이거나 타이밍 이슈로 실패할 수 있음 (무시해도 됨)
+                logger.debug({ error, jobId }, "Job already completed or moved");
+              });
+          }
+
+          // 대기 중인 resolver가 있으면 호출
+          const resolver = this.preprocessingResolvers.get(jobId);
+          if (resolver) {
+            resolver(result);
+            this.preprocessingResolvers.delete(jobId);
+          }
         } else if (status === "failed") {
-          await queueService.failedJob(jobId);
+          // Bull job을 failed로 마킹
+          const job = await this.getJob(jobId);
+          if (job) {
+            await job
+              .moveToFailed(
+                { message: result?.filter_reason || "Preprocessing failed" },
+                true
+              )
+              .catch((error) => {
+                // 이미 failed 상태이거나 타이밍 이슈로 실패할 수 있음 (무시해도 됨)
+                logger.debug({ error, jobId }, "Job already failed or moved");
+              });
+          }
+
+          // 실패 시 resolver에게 에러 전달
+          const resolver = this.preprocessingResolvers.get(jobId);
+          if (resolver) {
+            // reject는 따로 관리하지 않으므로, filtered=true로 처리
+            const failedResult: PreprocessingResult = {
+              original_text: "",
+              preprocessed_text: "",
+              detected_language: "unknown",
+              preprocessing_time_ms: 0,
+              filtered: true,
+              filter_reason: result?.filter_reason || "Preprocessing failed",
+            };
+            resolver(failedResult);
+            this.preprocessingResolvers.delete(jobId);
+          }
         }
-        // console.log("completeJob", performance.now() - time);
       } catch (err) {
-        logger.error("Error processing Python completion message:", err);
+        logger.error(
+          { err },
+          "Error processing Python preprocessing message"
+        );
       }
     });
   }
@@ -153,6 +228,34 @@ class QueueService {
       job.finished() as Promise<TranslationResult>,
       new Promise<TranslationResult>((_, reject) =>
         setTimeout(() => reject(new Error("Job timeout")), timeout)
+      ),
+    ]);
+  }
+
+  /**
+   * 전처리 결과 대기
+   */
+  async waitForPreprocessing(
+    jobId: string,
+    timeout: number = config.queue.timeout
+  ): Promise<PreprocessingResult> {
+    // 이미 결과가 있으면 즉시 반환
+    const cached = this.preprocessingResults.get(jobId);
+    if (cached) {
+      this.preprocessingResults.delete(jobId); // 사용 후 삭제
+      return cached;
+    }
+
+    // Promise로 대기
+    return Promise.race([
+      new Promise<PreprocessingResult>((resolve) => {
+        this.preprocessingResolvers.set(jobId, resolve);
+      }),
+      new Promise<PreprocessingResult>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("Preprocessing timeout")),
+          timeout
+        )
       ),
     ]);
   }
@@ -203,9 +306,9 @@ class QueueService {
 
     const now = Date.now();
 
-    // Stuck 판단 기준 (ms)
-    const ACTIVE_STUCK_THRESHOLD = 30000; // 30초 이상 처리 중
-    const WAITING_STUCK_THRESHOLD = 60000; // 1분 이상 대기
+    // Stuck 판단 기준 (ms) - 전처리 전용으로 조정
+    const ACTIVE_STUCK_THRESHOLD = 5000; // 5초 이상 처리 중 (전처리는 빠름)
+    const WAITING_STUCK_THRESHOLD = 10000; // 10초 이상 대기
 
     // Stuck active jobs (처리 중인데 너무 오래 걸리는 것들)
     const stuckActiveJobs = activeJobs.filter((job) => {

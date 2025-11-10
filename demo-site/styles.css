@@ -463,6 +463,16 @@ body::before {
   box-shadow: 0 6px 16px rgba(255, 138, 101, 0.4);
 }
 
+.action-btn.download {
+  background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+  color: white;
+}
+
+.action-btn.download:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(76, 175, 80, 0.4);
+}
+
 .action-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;

@@ -1,1 +1,1 @@
-{"version":3,"file":"translate.routes.d.ts","sourceRoot":"","sources":["../../src/routes/translate.routes.ts"],"names":[],"mappings":"AAOA,QAAA,MAAM,MAAM,4CAAW,CAAC;AA4YxB,eAAe,MAAM,CAAC"}
+{"version":3,"file":"translate.routes.d.ts","sourceRoot":"","sources":["../../src/routes/translate.routes.ts"],"names":[],"mappings":"AASA,QAAA,MAAM,MAAM,4CAAW,CAAC;AAIxB,eAAO,MAAM,mBAAmB,GAAI,IAAI,GAAG,SAE1C,CAAC;AA83BF,eAAe,MAAM,CAAC"}

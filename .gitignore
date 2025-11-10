@@ -31,6 +31,7 @@ daily/
 node_modules/
 api-gateway/node_modules/
 api-gateway/dist/
+api-gateway/.env
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

@@ -4,6 +4,8 @@ exports.WebSocketService = void 0;
 const ws_1 = require("ws");
 const zod_1 = require("zod");
 const queue_service_1 = require("./queue.service");
+const cache_grpc_service_1 = require("./cache-grpc.service");
+const xlsx_logger_service_1 = require("./xlsx-logger.service");
 const logger_1 = require("../utils/logger");
 const crypto_1 = require("crypto");
 const wsMessageSchema = zod_1.z.object({
@@ -43,7 +45,7 @@ class WebSocketService {
             ws.on("message", async (data) => {
                 try {
                     const message = JSON.parse(data.toString());
-                    logger_1.logger.info({ message, clientId }, "WebSocket message received");
+                    // logger.info({ message, clientId }, "WebSocket message received");
                     await this.handleMessage(ws, clientId, message);
                 }
                 catch (error) {
@@ -87,41 +89,17 @@ class WebSocketService {
                     }));
                     return;
                 }
-                const jobId = (0, crypto_1.randomUUID)();
-                // Add job to queue
-                const job = await queue_service_1.queueService.addJob({
-                    id: jobId,
-                    text: validatedMessage.text,
-                    targetLanguages: validatedMessage.targetLanguages,
-                    options: validatedMessage.options,
-                    createdAt: Date.now(),
+                logger_1.logger.info({
+                    text: validatedMessage.text.substring(0, 50),
+                    languageCount: validatedMessage.targetLanguages.length,
+                    clientId,
+                }, "WebSocket translate request received");
+                // 각 언어를 완전히 독립적으로 처리 (fire-and-forget)
+                validatedMessage.targetLanguages.forEach((targetLang) => {
+                    this.processLanguageIndependentlyForWebSocket(ws, validatedMessage.text, targetLang, validatedMessage.options || {}).catch((error) => {
+                        logger_1.logger.error({ error, targetLang, clientId }, "WebSocket translation error");
+                    });
                 });
-                // Send acknowledgment
-                ws.send(JSON.stringify({
-                    type: "queued",
-                    jobId: job.id,
-                }));
-                // Wait for result and send back
-                try {
-                    const result = await queue_service_1.queueService.waitForResult(jobId);
-                    if (ws.readyState === ws_1.WebSocket.OPEN) {
-                        ws.send(JSON.stringify({
-                            type: "result",
-                            jobId,
-                            data: result,
-                        }));
-                    }
-                }
-                catch (error) {
-                    logger_1.logger.error({ error, jobId, clientId }, "Translation failed in WebSocket");
-                    if (ws.readyState === ws_1.WebSocket.OPEN) {
-                        ws.send(JSON.stringify({
-                            type: "error",
-                            jobId,
-                            error: "Translation failed or timeout",
-                        }));
-                    }
-                }
             }
         }
         catch (error) {
@@ -137,6 +115,120 @@ class WebSocketService {
                 ws.send(JSON.stringify({
                     type: "error",
                     error: "Internal server error",
+                }));
+            }
+        }
+    }
+    /**
+     * 각 언어를 완전히 독립적으로 처리 (전처리 + 번역)
+     */
+    async processLanguageIndependentlyForWebSocket(ws, text, targetLang, options) {
+        const jobId = (0, crypto_1.randomUUID)();
+        const startTime = performance.now();
+        try {
+            // Step 1: 전처리 (각 언어마다 독립적으로)
+            await queue_service_1.queueService.addJob({
+                id: jobId,
+                text: text,
+                targetLanguages: [targetLang],
+                options: options,
+                createdAt: Date.now(),
+            });
+            logger_1.logger.debug({ jobId, targetLang }, "Independent WebSocket job started");
+            // Step 2: 전처리 결과 대기
+            const preprocessingResult = await queue_service_1.queueService.waitForPreprocessing(jobId);
+            if (preprocessingResult.filtered) {
+                logger_1.logger.warn({ jobId, targetLang }, "Text filtered in preprocessing");
+                if (ws.readyState === ws_1.WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: "partial-error",
+                        jobId,
+                        data: {
+                            language: targetLang,
+                            error: "Text filtered",
+                            reason: preprocessingResult.filter_reason,
+                        },
+                    }));
+                }
+                return;
+            }
+            // Step 3: 전처리 완료 전송
+            if (ws.readyState === ws_1.WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: "preprocessing-complete",
+                    jobId,
+                    data: {
+                        language: targetLang,
+                        originalText: preprocessingResult.original_text,
+                        preprocessedText: preprocessingResult.preprocessed_text,
+                        detectedLanguage: preprocessingResult.detected_language,
+                        preprocessing_ms: preprocessingResult.preprocessing_time_ms,
+                    },
+                }));
+            }
+            // Step 4: 번역 (단일 언어)
+            const translationStartTime = performance.now();
+            const grpcResult = await cache_grpc_service_1.cacheGrpcService.translate({
+                text: preprocessingResult.preprocessed_text,
+                source_lang: preprocessingResult.detected_language,
+                target_langs: [targetLang],
+                use_cache: true,
+                cache_strategy: "hybrid",
+                translator_name: "vllm",
+            });
+            const translationDuration = performance.now() - translationStartTime;
+            const totalDuration = performance.now() - startTime;
+            // Step 5: 번역 완료 전송
+            if (grpcResult.translations[targetLang]) {
+                if (ws.readyState === ws_1.WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: "partial-translation",
+                        jobId,
+                        data: {
+                            language: targetLang,
+                            translation: grpcResult.translations[targetLang],
+                            cacheHit: grpcResult.cache_hits[targetLang] || false,
+                            translation_ms: translationDuration,
+                            total_ms: totalDuration,
+                        },
+                    }));
+                }
+                // CSV 로깅
+                xlsx_logger_service_1.xlsxLoggerService.logTranslation({
+                    timestamp: new Date().toISOString(),
+                    originalText: preprocessingResult.original_text,
+                    preprocessedText: preprocessingResult.preprocessed_text,
+                    detectedLanguage: preprocessingResult.detected_language,
+                    translations: {
+                        [targetLang]: grpcResult.translations[targetLang],
+                    },
+                    timings: {
+                        preprocessingMs: preprocessingResult.preprocessing_time_ms,
+                        translationMs: translationDuration,
+                        totalMs: totalDuration,
+                    },
+                    cacheHits: grpcResult.cache_hits[targetLang] || false,
+                    cacheProcessingMs: grpcResult.processing_time_ms,
+                    filtered: false,
+                });
+                logger_1.logger.info({
+                    jobId,
+                    targetLang,
+                    duration: totalDuration,
+                }, "Independent WebSocket translation completed");
+            }
+        }
+        catch (error) {
+            logger_1.logger.error({ error, jobId, targetLang }, "Independent WebSocket translation failed");
+            if (ws.readyState === ws_1.WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: "partial-error",
+                    jobId,
+                    data: {
+                        language: targetLang,
+                        error: "Translation failed",
+                        message: error instanceof Error ? error.message : "Unknown error",
+                    },
                 }));
             }
         }

@@ -12,17 +12,8 @@ from loguru import logger
 from src.config import settings
 from src.models import TranslationJob, TranslationResult, PreprocessOptions
 from src.preprocessor.text_processor import TextPreprocessor
-from src.services.vllm_service import VLLMService
-from src.services.ollama_service import OllamaService
-from src.services.cache_service import CacheService
-from src.services.translation_logger import translation_logger
 
-# gRPC Service (선택적)
-try:
-    from src.services.cache_service_grpc import CacheServiceGRPC
-    GRPC_AVAILABLE = True
-except ImportError:
-    GRPC_AVAILABLE = False
+# 번역 서비스는 더 이상 사용하지 않음 (API Gateway에서 처리)
 
 # 로깅 설정
 logger.remove()
@@ -32,35 +23,12 @@ logger.add(
     level=settings.log_level
 )
 
-# 전처리기 및 번역 서비스 초기화
+# 전처리기 초기화 (번역은 API Gateway에서 처리)
 preprocessor = TextPreprocessor()
-ollama_service = OllamaService()
-
-# Cache Service 선택: gRPC (빠름) 또는 HTTP
-# if settings.use_ollama:
-#     translation_service = ollama_service
-#     service_name = "Ollama"
-# else:
-#     # gRPC vs HTTP 선택
-#     if settings.use_grpc and GRPC_AVAILABLE:
-#         try:
-#             caching_service = CacheServiceGRPC()
-#             service_name = "Cache (gRPC)"
-#             logger.info("✅ Using gRPC for cache service")
-#         except Exception as e:
-#             logger.warning(f"gRPC failed ({e}), falling back to HTTP")
-#             caching_service = CacheService()
-#             service_name = "Cache (HTTP)"
-#     else:
-#         if settings.use_grpc and not GRPC_AVAILABLE:
-#             logger.warning("gRPC not available, falling back to HTTP")
-#         caching_service = CacheService()
-#         service_name = "Cache (HTTP)"
-#     translation_service = caching_service
 
 
-def process_bull_job(job_id: str, job_data: dict, translation_service) -> dict:
-    """Bull 작업 처리 (최적화됨)"""
+def process_bull_job(job_id: str, job_data: dict) -> dict:
+    """Bull 작업 처리 - 전처리 전용 (번역은 API Gateway에서 처리)"""
     start_time = time.time()
 
     try:
@@ -91,82 +59,31 @@ def process_bull_job(job_id: str, job_data: dict, translation_service) -> dict:
         except Exception as e:
             logger.error(f"Preprocessing failed: {e}", exc_info=True)
             return None
-        
+
         preprocess_time = (time.time() - preprocess_start) * 1000  # ms
-
-        # 필터링된 경우
-        if filtered:
-            logger.debug(f"Job {job_id} filtered: {filter_reason}")
-            processing_time = time.time() - start_time
-
-            # 필터링된 애는 번역 안태우고 원본 그대로 노출 - 맞나?
-            result = TranslationResult(
-                id=job.id,
-                original_text=job.text,
-                preprocessed_text=preprocessed_text,
-                translations={},
-                detected_language="unknown",
-                processing_time=processing_time,
-                filtered=True,
-                filter_reason=filter_reason,
-            )
-            return result.model_dump()
 
         # 2. 언어 감지
         lang_detect_start = time.time()
         detected_lang = preprocessor.detect_language(preprocessed_text)
         if not detected_lang:
             detected_lang = "ko"  # 기본값
-        lang_detect_time = time.time() - lang_detect_start
+        lang_detect_time = (time.time() - lang_detect_start) * 1000  # ms
 
-        # 3. 번역 요청 (Ollama 또는 VLLM)
-        translate_start = time.time()
-        loop = asyncio.get_running_loop()
+        processing_time = (time.time() - start_time) * 1000  # ms
 
-        def sync_translate():
-            return  
-            
-        # executor 스레드에서 동작
-        translation, translate_processing_time_ms, translate_llm_time_ms, translate_cache_hit_time_ms = \
-            translation_service.translate(
-                text=preprocessed_text,
-                source_lang=detected_lang,
-                target_languages=job.target_languages
-            )
+        # 3. 전처리 결과 반환 (번역은 API Gateway에서 수행)
+        result = {
+            "original_text": job.text,
+            "preprocessed_text": preprocessed_text,
+            "detected_language": detected_lang,
+            "preprocessing_time_ms": processing_time,
+            "filtered": filtered,
+            "filter_reason": filter_reason if filtered else None,
+        }
 
-        print(translation, "상위 성공")
-        translate_time = time.time() - translate_start
-        processing_time = time.time() - start_time
+        logger.debug(f"Job {job_id} preprocessing completed in {processing_time:.0f}ms")
 
-        # 4. 결과 생성
-        result = TranslationResult(
-            id=job.id,
-            original_text=job.text,
-            preprocessed_text=preprocessed_text,
-            translations=translation,
-            detected_language=detected_lang,
-            processing_time=processing_time,
-            filtered=False
-        )
-
-        # 5. CSV 로깅 (비동기, 설정에 따라)
-        if settings.enable_translation_logging:
-            translation_logger.log_bulk_translations(
-                original_text=job.text,
-                preprocessed_text=preprocessed_text,
-                source_language=detected_lang,
-                translations=translation,
-                processing_time_ms=processing_time * 1000,
-                lang_detect_time=lang_detect_time * 1000,
-                translate_processing_time_ms=translate_processing_time_ms,
-                translate_llm_time_ms=translate_llm_time_ms,
-                translate_cache_hit_time_ms=translate_cache_hit_time_ms,
-                filtered=False,
-            )
-
-        logger.debug(f"Job {job_id} completed in {processing_time*1000:.0f}ms")
-
-        return result.model_dump()
+        return result
 
     except Exception as e:
         logger.error(f"Job processing error: {e}", exc_info=True)
@@ -215,11 +132,22 @@ def get_job_data(redis_conn: Redis, queue_name: str, job_id: str):
         return None
 
 def complete_job(redis_conn: Redis, queue_name: str, job_id: str, result: dict):
-    """작업 완료 이벤트만 발행 (Bull이 Redis 상태를 직접 관리하도록 둔다)"""
-    print('complete_job start')
-    # Bull 워커가 상태를 업데이트할 수 있도록 결과만 전달
-    redis_conn.publish(f"bull:translation-results:jobId", json.dumps({'jobId': job_id, 'result': result, 'status': 'completed'}, ensure_ascii=False))
-    print('complete_job end pulish')
+    """전처리 완료 이벤트 발행 (API Gateway가 전처리 결과를 받아서 gRPC 호출)"""
+    logger.debug(f"Publishing preprocessing result for job {job_id}")
+
+    # ✨ active 리스트에서 제거 (중요! 안하면 계속 쌓임)
+    redis_conn.lrem(f"bull:{queue_name}:active", 0, job_id)
+
+    # 전처리 결과를 API Gateway로 전달
+    redis_conn.publish(
+        "bull:preprocessing-results:jobId",
+        json.dumps({
+            'jobId': job_id,
+            'result': result,
+            'status': 'completed'
+        }, ensure_ascii=False)
+    )
+    logger.debug(f"Preprocessing result published for job {job_id}")
 # def complete_job(redis_conn: Redis, queue_name: str, job_id: str, result: dict):
 #     """작업 완료 처리"""
 #     job_key = f"bull:{queue_name}:{job_id}"
@@ -243,8 +171,18 @@ def complete_job(redis_conn: Redis, queue_name: str, job_id: str, result: dict):
 #     logger.info(f"Job {job_id} published event completed : {result}")
 
 def fail_job(redis_conn: Redis, queue_name: str, job_id: str, error: str):
-    """작업 실패 처리"""
-    redis_conn.publish(f"bull:translation-results:jobId", json.dumps({'jobId': job_id, 'result': null, 'status': 'failed'}, ensure_ascii=False))
+    """전처리 실패 처리"""
+    # ✨ active 리스트에서 제거 (중요! 안하면 계속 쌓임)
+    redis_conn.lrem(f"bull:{queue_name}:active", 0, job_id)
+
+    redis_conn.publish(
+        "bull:preprocessing-results:jobId",
+        json.dumps({
+            'jobId': job_id,
+            'result': {'filter_reason': error},
+            'status': 'failed'
+        }, ensure_ascii=False)
+    )
 
     # job_key = f"bull:{queue_name}:{job_id}"
 
@@ -263,7 +201,7 @@ def fail_job(redis_conn: Redis, queue_name: str, job_id: str, error: str):
 
 
 async def worker_task(worker_id: int, queue_name: str):
-    """개별 워커 태스크 (병렬 처리용)"""
+    """개별 워커 태스크 (전처리 전용)"""
     # 각 워커마다 독립적인 Redis 연결 생성
     redis_conn = Redis(
         host=settings.redis_host,
@@ -272,28 +210,7 @@ async def worker_task(worker_id: int, queue_name: str):
         decode_responses=False  # Bull은 바이너리 데이터 사용
     )
 
-    logger.info(f"Worker-{worker_id} started with dedicated Redis connection")
-
-    if settings.use_ollama:
-        translation_service = ollama_service
-        service_name = "Ollama"
-    else:
-        # gRPC vs HTTP 선택
-        if settings.use_grpc and GRPC_AVAILABLE:
-            try:
-                caching_service = CacheServiceGRPC()
-                service_name = "Cache (gRPC)"
-                logger.info("✅ Using gRPC for cache service")
-            except Exception as e:
-                logger.warning(f"gRPC failed ({e}), falling back to HTTP")
-                caching_service = CacheService()
-                service_name = "Cache (HTTP)"
-        else:
-            if settings.use_grpc and not GRPC_AVAILABLE:
-                logger.warning("gRPC not available, falling back to HTTP")
-            caching_service = CacheService()
-            service_name = "Cache (HTTP)"
-        translation_service = caching_service
+    logger.info(f"Worker-{worker_id} started (preprocessing only)")
 
     try:
         for job_id in get_waiting_jobs(redis_conn, queue_name):
@@ -305,14 +222,21 @@ async def worker_task(worker_id: int, queue_name: str):
                     fail_job(redis_conn, queue_name, job_id, "Failed to get job data")
                     continue
 
-                job_start =  time.time()
-                # 작업 처리
-                result = process_bull_job(job_id, job_data, translation_service)
-                print(time.time() - job_start, '@@ job 끝')
-                # 완료 처리
+                job_start = time.time()
+
+                # 전처리만 수행
+                result = process_bull_job(job_id, job_data)
+
+                if not result:
+                    fail_job(redis_conn, queue_name, job_id, "Preprocessing failed")
+                    continue
+
+                # 완료 처리 (전처리 결과 발행)
                 complete_job(redis_conn, queue_name, job_id, result)
-                
-                print(time.time() - job_start, '완료 처리 done :', job_id, result)
+
+                job_duration = (time.time() - job_start) * 1000
+                logger.debug(f"Job {job_id} completed in {job_duration:.0f}ms")
+
             except Exception as e:
                 logger.error(f"[Worker-{worker_id}] Error processing job {job_id}: {e}", exc_info=True)
                 fail_job(redis_conn, queue_name, job_id, str(e))
@@ -328,30 +252,16 @@ async def worker_task(worker_id: int, queue_name: str):
 
 
 async def main():
-    """메인 워커 루프 (병렬 처리)"""
+    """메인 워커 루프 (전처리 전용)"""
     queue_name = settings.queue_name
     concurrency = settings.worker_concurrency
 
-    logger.info("Starting Bull-compatible worker...")
+    logger.info("Starting preprocessing worker...")
     logger.info(f"Redis: {settings.redis_host}:{settings.redis_port}")
     logger.info(f"Queue: {queue_name}")
     logger.info(f"Concurrency: {concurrency} workers")
-    # logger.info(f"Translation Service: {service_name}")
-    if settings.use_ollama:
-        logger.info(f"Ollama: {settings.ollama_url} (Model: {settings.ollama_model})")
-    else:
-        logger.info(f"Cache Service: {settings.caching_url}")
-
-    # 로깅 설정 출력
-    if settings.enable_translation_logging:
-        logger.info("Translation CSV logging: ENABLED (async queue-based)")
-        translation_logger.start_background_writer()
-    else:
-        logger.info("Translation CSV logging: DISABLED")
-
+    logger.info("Mode: Preprocessing only (translation handled by API Gateway)")
     logger.info("Workers started, waiting for jobs...")
-
-
 
     try:
         # 여러 워커를 병렬로 실행
@@ -366,10 +276,6 @@ async def main():
         logger.info("All workers shutting down...")
     except Exception as e:
         logger.error(f"Main worker error: {e}", exc_info=True)
-    finally:
-        # 백그라운드 로거 종료
-        if settings.enable_translation_logging:
-            await translation_logger.stop_background_writer()
 
 
 if __name__ == "__main__":
