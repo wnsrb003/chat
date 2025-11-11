@@ -9,7 +9,7 @@ langdetect==1.0.9
 ftfy==6.1.3
 git+https://github.com/haven-jeon/PyKoSpacing.git
 tensorflow==2.20.0
-numpy>=2.3.0
+numpy>=1.26.0
 kss==6.0.5
 symspellpy-ko==0.1.3
 
@@ -18,16 +18,16 @@ httpx==0.25.2
 aiohttp==3.9.1
 
 # gRPC (optional, for faster cache service)
-grpcio==1.60.0
-grpcio-tools==1.60.0
-protobuf>=5.29.0  # gRPC 호환 버전
+grpcio>=1.65.0
+grpcio-tools>=1.65.0
+protobuf>=5.28.0  # tensorflow 2.20.0 호환
 
 # Logging
 loguru==0.7.2
 
 # Data validation
-pydantic==2.5.3
-pydantic-settings==2.1.0
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
 
 # Testing
 pytest==7.4.3
