@@ -28,6 +28,8 @@ export interface TranslationResult {
   processing_time_ms: number;
   success: boolean;
   error_message?: string;
+  cache_lookup_time_ms?: number;
+  llm_response_time_ms?: Record<string, number>;
 }
 
 export interface TranslateParams {
@@ -118,6 +120,8 @@ class CacheGrpcService {
             processing_time_ms: response.processing_time_ms,
             success: response.success,
             error_message: response.error_message,
+            cache_lookup_time_ms: response.cache_lookup_time_ms,
+            llm_response_time_ms: response.llm_response_time_ms,
           });
         }
       );

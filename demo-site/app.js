@@ -3,6 +3,7 @@ const state = {
   ws: null,
   chats: SAMPLE_CHATS,
   displayedChats: [],
+  allSimulatedChats: [], // 시뮬레이션된 모든 채팅 (삭제 안 함, 번역용)
   selectedLang: "en", // 단일 언어 선택으로 변경
   translatedCount: 0,
   totalTime: 0,
@@ -109,8 +110,8 @@ function cleanupOldChats() {
 
 // WebSocket 연결
 function connectWebSocket() {
-  // const wsUrl = "ws://localhost:3000/ws";
-  const wsUrl = "wss://3000-01k7redychy4yr660skfrd1nqc.cloudspaces.litng.ai/ws";
+  const wsUrl = "ws://localhost:3000/ws";
+  // const wsUrl = "wss://3000-01k7redychy4yr660skfrd1nqc.cloudspaces.litng.ai/ws";
 
   elements.status.className = "status disconnected";
   elements.status.textContent = "연결 중...";
@@ -168,6 +169,7 @@ function handleWebSocketMessage(message) {
 
     case "partial-translation":
       // 각 언어별 번역 완료 - 즉시 화면에 표시
+      handlePreprocessingComplete(message.jobId, message.data);
       handlePartialTranslation(message.jobId, message.data);
       break;
 
@@ -311,6 +313,31 @@ function handleTranslationUpdate(data) {
 
   // RPS 기록
   recordCompletion();
+
+  // XLSX 로깅용 데이터 추가 (data에 모든 정보 포함됨)
+  if (originalText && translation) {
+    const xlsxRow = {
+      timestamp: new Date().toISOString(),
+      original_text: originalText,
+      preprocessed_text: data.preprocessedText,
+      detected_language: data.detectedLanguage,
+      translation_lang: language,
+      translation_text: translation,
+      total_time_ms: data.total_ms || -1,
+      // total_gateway_time_ms: data.total_ms || -1,
+      preprocessing_time_ms: data.preprocessing_ms || -1,
+      total_cache_server_time_ms: data.cache_processing_ms || -1,
+      cache_hits: data.cacheHit || false,
+      // cache_processing_ms: data.cache_processing_ms || -1,
+      cache_lookup_ms: data.cache_lookup_time_ms || -1,
+      llm_response_time_ms: data.llm_response_time_ms[language] || -1,
+      filtered: data.filtered || false,
+      filter_reason: data.filter_reason || "",
+    };
+    state.xlsxData.push(xlsxRow);
+  } else {
+    console.warn("⚠️ Missing originalText or translation:", data);
+  }
 }
 
 // 번역 결과 포맷팅 (언어 태그 제거, 번역만 표시)
@@ -361,7 +388,7 @@ function handlePreprocessingComplete(jobId, data) {
 
 // WebSocket 스트리밍: 각 언어별 번역 완료 (실시간 표시)
 function handlePartialTranslation(jobId, data) {
-  const { language, translation, translation_ms, metadata } = data;
+  const { language, translation, metadata } = data;
 
   // 캐시에서 메시지 찾기 (성능 최적화)
   let messageDiv = state.messageCache.get(jobId);
@@ -409,7 +436,7 @@ function handlePartialTranslation(jobId, data) {
 
   // 통계 업데이트 (각 언어별로)
   state.translatedCount++;
-  state.totalTime += translation_ms;
+  state.totalTime += data.total_ms;
 
   elements.translatedCount.textContent = state.translatedCount;
   elements.avgTime.textContent =
@@ -423,17 +450,20 @@ function handlePartialTranslation(jobId, data) {
     const xlsxRow = {
       timestamp: new Date().toISOString(),
       original_text: originalText,
-      // preprocessed_text: data.preprocessedText,
-      // detected_language: data.detectedLanguage,
+      preprocessed_text: data.preprocessedText,
+      detected_language: data.detectedLanguage,
       translation_lang: language,
       translation_text: translation,
-      total_time_ms: (data.preprocessing_ms || 0) + translation_ms,
-      preprocessing_time_ms: data.preprocessing_ms || 0,
-      translation_time_ms: translation_ms,
+      total_time_ms: data.total_ms || -1,
+      // total_gateway_time_ms: data.total_ms || -1,
+      preprocessing_time_ms: data.preprocessing_ms || -1,
+      total_cache_server_time_ms: data.cache_processing_ms || -1,
       cache_hits: data.cacheHit || false,
-      cache_processing_ms: data.cache_processing_ms || 0,
-      filtered: false,
-      filter_reason: "",
+      // cache_processing_ms: data.cache_processing_ms || -1,
+      cache_lookup_ms: data.cache_lookup_time_ms || -1,
+      llm_response_time_ms: data.llm_response_time_ms[language] || -1,
+      filtered: data.filtered || false,
+      filter_reason: data.filter_reason || "",
     };
     state.xlsxData.push(xlsxRow);
   } else {
@@ -501,6 +531,7 @@ function startChatSimulation() {
   state.isSimulating = true;
   state.currentSimIndex = 0;
   state.displayedChats = [];
+  state.allSimulatedChats = []; // 전체 시뮬레이션 목록 초기화
 
   elements.simulateBtn.disabled = true;
   elements.startBtn.disabled = false;
@@ -529,6 +560,7 @@ function showNextChat() {
   const chat = state.chats[state.currentSimIndex];
   const currentIndex = state.currentSimIndex;
   state.displayedChats.push(chat);
+  state.allSimulatedChats.push(chat); // 번역용 전체 목록에 추가
 
   const messageDiv = document.createElement("div");
   messageDiv.className = "chat-message";
@@ -581,11 +613,11 @@ function showNextChat() {
 async function translateChat(index) {
   // if (!state.isTranslating) return;
 
-  const chat = state.displayedChats[index];
+  const chat = state.allSimulatedChats[index]; // 전체 시뮬레이션 목록에서 가져오기
   if (!chat) return;
 
   const messageDiv = document.querySelector(`[data-index="${index}"]`);
-  if (!messageDiv) return;
+  // messageDiv가 없어도 번역은 진행 (XLSX 데이터 수집용)
 
   const options = {
     expandAbbreviations: elements.expandAbbr.checked,
@@ -634,75 +666,69 @@ async function translateChat(index) {
         );
 
         if (result.success && result.data) {
-          console.log(`[${lang}] 번역 데이터:`, result.data.translations);
+          const { translation, preprocessedText } = result.data[lang];
+          console.log(`[${lang}] 번역 데이터:`, translation);
 
           // 전처리 텍스트 저장 및 즉시 업데이트 (첫 번째 응답만)
           if (!preprocessedText) {
-            preprocessedText =
-              result.data.preprocessedText ||
-              result.data.preProcessedText ||
-              "";
+            preprocessedText = preprocessedText || "";
 
-            const preprocessedTextEl = messageDiv.querySelector(
-              ".chat-preprocessed .chat-text"
-            );
-            if (preprocessedTextEl) {
-              preprocessedTextEl.textContent = preprocessedText;
-              console.log(
-                `[${lang}] 전처리 텍스트 업데이트:`,
-                preprocessedText
+            // DOM이 있을 때만 업데이트
+            if (messageDiv) {
+              const preprocessedTextEl = messageDiv.querySelector(
+                ".chat-preprocessed .chat-text"
               );
-            } else {
-              console.warn(`[${lang}] 전처리 텍스트 요소를 찾을 수 없음`);
+              if (preprocessedTextEl) {
+                preprocessedTextEl.textContent = preprocessedText;
+                console.log(
+                  `[${lang}] 전처리 텍스트 업데이트:`,
+                  preprocessedText
+                );
+              } else {
+                console.warn(`[${lang}] 전처리 텍스트 요소를 찾을 수 없음`);
+              }
             }
           }
 
           // 번역 결과가 들어오는 즉시 해당 언어 필드 업데이트
-          if (result.data.translations && result.data.translations[lang]) {
-            const translationText = messageDiv.querySelector(
-              `.chat-translation .chat-text[data-lang="${lang}"]`
-            );
-
-            console.log(`[${lang}] 번역 요소 찾기:`, translationText);
-            console.log(
-              `[${lang}] 번역 텍스트:`,
-              result.data.translations[lang]
-            );
-
-            if (translationText) {
-              translationText.textContent = result.data.translations[lang];
-              console.log(
-                `[${lang}] ✅ 번역 표시 완료:`,
-                result.data.translations[lang]
+          if (translation) {
+            // DOM이 있을 때만 업데이트
+            if (messageDiv) {
+              const translationText = messageDiv.querySelector(
+                `.chat-translation .chat-text[data-lang="${lang}"]`
               );
 
-              // 완료 시 초록색으로 강조 (200ms)
-              translationText.style.color = "#28a745";
-              translationText.style.fontWeight = "bold";
+              console.log(`[${lang}] 번역 요소 찾기:`, translationText);
+              console.log(`[${lang}] 번역 텍스트:`, translation);
 
-              setTimeout(() => {
-                translationText.style.color = "";
-                translationText.style.fontWeight = "";
-              }, 200);
-            } else {
-              console.error(`[${lang}] ⚠️ 번역 요소를 찾을 수 없음!`);
-              console.log("messageDiv:", messageDiv);
-              console.log(
-                "모든 .chat-translation 요소:",
-                messageDiv.querySelectorAll(".chat-translation")
-              );
+              if (translationText) {
+                translationText.textContent = translation;
+                console.log(`[${lang}] ✅ 번역 표시 완료:`, translation);
+
+                // 완료 시 초록색으로 강조 (200ms)
+                translationText.style.color = "#28a745";
+                translationText.style.fontWeight = "bold";
+
+                setTimeout(() => {
+                  translationText.style.color = "";
+                  translationText.style.fontWeight = "";
+                }, 200);
+              } else {
+                console.error(`[${lang}] ⚠️ 번역 요소를 찾을 수 없음!`);
+                console.log("messageDiv:", messageDiv);
+                console.log(
+                  "모든 .chat-translation 요소:",
+                  messageDiv.querySelectorAll(".chat-translation")
+                );
+              }
             }
           } else {
-            console.warn(
-              `[${lang}] ⚠️ 번역 결과가 없음:`,
-              result.data.translations
-            );
+            console.warn(`[${lang}] ⚠️ 번역 결과가 없음:`, translation);
           }
 
           // 통계 업데이트 (각 언어별로)
           state.translatedCount++;
-          const processingTime =
-            result.data.timings?.total_ms || result.data.processing_time || 0;
+          const processingTime = result.data[lang].total_ms;
           state.totalTime += processingTime;
 
           elements.translatedCount.textContent = state.translatedCount;
@@ -712,6 +738,40 @@ async function translateChat(index) {
           // RPS 기록
           recordCompletion();
 
+          // XLSX 로깅용 데이터 추가 (data에 모든 정보 포함됨)
+          if (translation) {
+            const {
+              originalText,
+              detectedLanguage,
+              preprocessedText,
+              cache_hit,
+              preprocessing_ms,
+              cache_processing_ms,
+              cache_lookup_time_ms,
+              llm_response_time_ms,
+              filtered,
+              filter_reason,
+            } = result.data[lang];
+            const xlsxRow = {
+              timestamp: new Date().toISOString(),
+              original_text: originalText,
+              preprocessed_text: preprocessedText,
+              detected_language: detectedLanguage,
+              translation_lang: lang,
+              translation_text: translation,
+              total_time_ms: processingTime || -1,
+              preprocessing_time_ms: preprocessing_ms || -1,
+              total_cache_server_time_ms: cache_processing_ms || -1,
+              cache_hits: cache_hit || false,
+              llm_response_time_ms: llm_response_time_ms[lang] || -1,
+              cache_lookup_ms: cache_lookup_time_ms || -1,
+              filtered: filtered || false,
+              filter_reason: filter_reason || "",
+            };
+            state.xlsxData.push(xlsxRow);
+          } else {
+            console.warn("⚠️ Missing http response data:", result.data);
+          }
           return result;
         }
         return null;
@@ -762,7 +822,15 @@ document.querySelectorAll(".chat-btn").forEach((btn) => {
 
     // 선택된 버튼만 활성화
     btn.classList.add("active");
-    state.chats = chat === "origin" ? SAMPLE_CHATS : RAG_SAMPLE_CHATS;
+
+    // 채팅 데이터셋 선택
+    if (chat === "origin") {
+      state.chats = SAMPLE_CHATS;
+    } else if (chat === "rag") {
+      state.chats = RAG_SAMPLE_CHATS;
+    } else if (chat === "vs4b") {
+      state.chats = VS_4B_CHATS;
+    }
   });
 });
 
@@ -779,7 +847,7 @@ elements.simulateBtn.addEventListener("click", () => {
 
 // 번역 시작 버튼
 elements.startBtn.addEventListener("click", () => {
-  if (state.displayedChats.length === 0) {
+  if (state.allSimulatedChats.length === 0) {
     alert("채팅 시작 버튼을 먼저 눌러주세요.");
     return;
   }
@@ -802,8 +870,8 @@ elements.startBtn.addEventListener("click", () => {
   elements.status.className = "status processing";
   elements.status.textContent = "⏳ 번역 중...";
 
-  // 이미 표시된 모든 채팅에 대해 동시에 번역 시작
-  for (let i = 0; i < state.displayedChats.length; i++) {
+  // 시뮬레이션된 모든 채팅에 대해 번역 시작 (화면에 표시되지 않은 것도 포함)
+  for (let i = 0; i < state.allSimulatedChats.length; i++) {
     translateChat(i);
   }
 });
@@ -834,6 +902,7 @@ elements.clearBtn.addEventListener("click", () => {
   state.totalTime = 0;
   state.translationQueue = [];
   state.displayedChats = [];
+  state.allSimulatedChats = []; // 전체 시뮬레이션 목록 초기화
   state.completionTimestamps = [];
   state.currentRPS = 0;
   state.messageCache.clear(); // 캐시 초기화
@@ -883,10 +952,12 @@ function downloadXlsx() {
         "translation_lang",
         "translation_text",
         "total_time_ms",
+        // "total_gateway_time_ms",
         "preprocessing_time_ms",
-        "translation_time_ms",
+        "total_cache_server_time_ms",
         "cache_hits",
-        "cache_processing_ms",
+        "cache_lookup_ms",
+        "llm_response_time_ms",
         "filtered",
         "filter_reason",
       ],
@@ -950,8 +1021,9 @@ async function sendManualChat() {
     text: text,
   };
 
-  const currentIndex = state.displayedChats.length;
+  const currentIndex = state.allSimulatedChats.length; // 전체 목록 기준 인덱스
   state.displayedChats.push(chat);
+  state.allSimulatedChats.push(chat); // 번역용 전체 목록에도 추가
 
   // 채팅 메시지 DOM 생성 (한 줄 레이아웃)
   const messageDiv = document.createElement("div");

@@ -135,38 +135,8 @@ router.post("/translate", async (req: Request, res: Response) => {
         jobId
       );
 
-      // logger.debug({ // CPU 최적화
-      //   msg: "Preprocessing completed",
-      //   jobId,
-      //   duration: performance.now() - startTime,
-      //   filtered: preprocessingResult.filtered,
-      // });
-
       // Step 3: Check if filtered
       if (preprocessingResult.filtered) {
-        // Log filtered text to CSV
-        // xlsxLoggerService.logTranslation({
-        //   timestamp: new Date().toISOString(),
-        //   originalText: preprocessingResult.original_text,
-        //   preprocessedText: preprocessingResult.preprocessed_text,
-        //   detectedLanguage: preprocessingResult.detected_language,
-        //   translations: {},
-        //   timings: {
-        //     preprocessingMs: preprocessingResult.preprocessing_time_ms,
-        //     translationMs: 0,
-        //     totalMs: performance.now() - startTime,
-        //   },
-        //   cacheHits: false,
-        //   cacheProcessingMs: 0,
-        //   filtered: true,
-        //   filterReason: preprocessingResult.filter_reason,
-        // });
-
-        // return res.status(400).json({
-        //   success: false,
-        //   error: "Text filtered",
-        //   reason: preprocessingResult.filter_reason,
-        // });
         const translations = {
           en: preprocessingResult.original_text,
           th: preprocessingResult.original_text,
@@ -182,27 +152,23 @@ router.post("/translate", async (req: Request, res: Response) => {
             translations,
             detectedLanguage: preprocessingResult.detected_language,
             cacheHits: false,
-            timings: {
-              preprocessing_ms: preprocessingResult.preprocessing_time_ms,
-              translation_ms: performance.now() - startTime,
-              total_ms: performance.now() - startTime,
-            },
+            preprocessing_ms: preprocessingResult.preprocessing_time_ms,
+            translation_ms: -1,
+            total_ms: performance.now() - startTime,
+            filtered: preprocessingResult.filtered,
+            filterReason: preprocessingResult.filter_reason,
           },
         });
       }
 
       // Step 4: Call gRPC for each language in parallel
-      const allTranslations: Record<string, string> = {};
-      const allCacheHits: Record<string, boolean> = {};
-      const languageTimings: Record<string, number> = {};
+      const allTranslations: Record<string, object> = {};
       let maxTranslationTime = 0;
 
       // 각 언어별로 병렬 처리
       const translationPromises = validatedData.targetLanguages.map(
         async (targetLang) => {
           try {
-            const langStartTime = performance.now();
-
             const grpcResult = await cacheGrpcService.translate({
               text: preprocessingResult.preprocessed_text,
               source_lang: preprocessingResult.detected_language,
@@ -212,40 +178,36 @@ router.post("/translate", async (req: Request, res: Response) => {
               translator_name: "vllm",
             });
 
-            const langDuration = performance.now() - langStartTime;
-            languageTimings[targetLang] = langDuration;
+            const langDuration = performance.now() - startTime;
             maxTranslationTime = Math.max(maxTranslationTime, langDuration);
 
             if (grpcResult.translations[targetLang]) {
-              allTranslations[targetLang] = grpcResult.translations[targetLang];
-              allCacheHits[targetLang] =
-                grpcResult.cache_hits[targetLang] || false;
+              allTranslations[targetLang] = {
+                id: jobId,
+                language: targetLang,
+                translation: grpcResult.translations[targetLang],
+                cache_hit: grpcResult.cache_hits[targetLang] || false,
+                originalText: preprocessingResult.original_text,
+                preprocessedText: preprocessingResult.preprocessed_text,
+                detectedLanguage: preprocessingResult.detected_language,
+                total_ms: langDuration,
+                preprocessing_ms: preprocessingResult.preprocessing_time_ms,
+                cache_processing_ms: grpcResult.processing_time_ms,
+                cache_lookup_time_ms: grpcResult.cache_lookup_time_ms || -1,
+                llm_response_time_ms: grpcResult.llm_response_time_ms || -1,
+                filtered: preprocessingResult.filtered,
+                filter_reason: preprocessingResult.filter_reason,
+              };
 
-              // 각 언어별로 CSV 로깅
-              // xlsxLoggerService.logTranslation({
-              //   timestamp: new Date().toISOString(),
-              //   originalText: preprocessingResult.original_text,
-              //   preprocessedText: preprocessingResult.preprocessed_text,
-              //   detectedLanguage: preprocessingResult.detected_language,
-              //   translations: {
-              //     [targetLang]: grpcResult.translations[targetLang],
-              //   } as any,
-              //   timings: {
-              //     preprocessingMs: preprocessingResult.preprocessing_time_ms,
-              //     translationMs: langDuration,
-              //     totalMs:
-              //       preprocessingResult.preprocessing_time_ms + langDuration,
-              //   },
-              //   cacheHits: grpcResult.cache_hits[targetLang] || false,
-              //   cacheProcessingMs: grpcResult.processing_time_ms,
-              //   filtered: false,
-              // });
-
-              // logger.debug({ // CPU 최적화
-              //   msg: "Parallel translation completed",
-              //   targetLang,
-              //   duration: langDuration,
-              // });
+              // allTranslations[targetLang].originalText =
+              //   preprocessingResult.original_text;
+              // allTranslations[targetLang] = grpcResult.translations[targetLang];
+              // allCacheHits[targetLang] =
+              //   grpcResult.cache_hits[targetLang] || false;
+              // cacheTimings[targetLang] = grpcResult.cache_lookup_time_ms || -1;
+              // llmTimings[targetLang] = grpcResult.llm_response_time_ms || -1;
+              // cacheTotalTimings[targetLang] =
+              //   grpcResult.processing_time_ms || -1;
             }
           } catch (error) {
             logger.error(
@@ -253,9 +215,7 @@ router.post("/translate", async (req: Request, res: Response) => {
               `Translation failed for ${targetLang}`
             );
             // 실패한 언어는 빈 문자열로 처리
-            allTranslations[targetLang] = "";
-            allCacheHits[targetLang] = false;
-            languageTimings[targetLang] = 0;
+            allTranslations[targetLang] = {};
           }
         }
       );
@@ -274,22 +234,26 @@ router.post("/translate", async (req: Request, res: Response) => {
       //   languageCount: validatedData.targetLanguages.length,
       // });
 
+      console.log(allTranslations, "@@@");
       // Step 5: Return result
       return res.json({
         success: true,
-        data: {
-          id: jobId,
-          originalText: preprocessingResult.original_text,
-          preprocessedText: preprocessingResult.preprocessed_text,
-          translations: allTranslations,
-          detectedLanguage: preprocessingResult.detected_language,
-          cacheHits: allCacheHits,
-          timings: {
-            preprocessing_ms: preprocessingResult.preprocessing_time_ms,
-            translation_ms: maxTranslationTime,
-            total_ms: totalDuration,
-          },
-        },
+        // data: {
+        //   id: jobId,
+        //   originalText: preprocessingResult.original_text,
+        //   preprocessedText: preprocessingResult.preprocessed_text,
+        //   translations: allTranslations,
+        //   detectedLanguage: preprocessingResult.detected_language,
+        //   cacheHits: allCacheHits,
+        //   timings: {
+        //     preprocessing_ms: preprocessingResult.preprocessing_time_ms,
+        //     total_ms: totalDuration,
+        //   },
+        //   cacheTimings: { cacheTotalTimings, cacheTimings, llmTimings },
+        //   filtered: false,
+        //   filter_reason: "",
+        // },
+        data: allTranslations,
       });
     } catch (error) {
       logger.error({ error, jobId }, "Translation job failed");
@@ -702,25 +666,35 @@ async function processLanguageIndependently(
 
     // Step 2: 전처리 결과 대기
     const preprocessingResult = await queueService.waitForPreprocessing(jobId);
+    const gateway_preprocessing_time_ms = performance.now() - startTime;
 
     if (preprocessingResult.filtered) {
       logger.warn({ jobId, targetLang }, "Text filtered in preprocessing");
       // 필터링 메시지 브로드캐스트 (CPU 최적화: 주석 처리 가능)
-      // if (wsService) {
-      //   wsService.broadcast({
-      //     type: "preprocessing-complete",
-      //     jobId,
-      //     data: {
-      //       language: targetLang,
-      //       originalText: preprocessingResult.original_text,
-      //       preprocessedText: preprocessingResult.original_text,
-      //       detectedLanguage: preprocessingResult.detected_language,
-      //       preprocessing_ms: preprocessingResult.preprocessing_time_ms,
-      //       reason: preprocessingResult.filter_reason,
-      //       metadata,
-      //     },
-      //   });
-      // }
+      if (wsService) {
+        wsService.broadcast({
+          type: "partial-translation",
+          jobId,
+          data: {
+            language: targetLang,
+            translation: preprocessingResult.original_text,
+            cacheHit: false,
+            total_ms: performance.now() - startTime,
+            // XLSX 로깅용 추가 정보
+            originalText: preprocessingResult.original_text,
+            preprocessedText: preprocessingResult.preprocessed_text,
+            detectedLanguage: preprocessingResult.detected_language,
+            gateway_preprocessing_time_ms: gateway_preprocessing_time_ms,
+            preprocessing_ms: preprocessingResult.preprocessing_time_ms,
+            cache_processing_ms: -1,
+            cache_lookup_time_ms: -1,
+            llm_response_time_ms: -1,
+            metadata,
+            filtered: true,
+            filter_reason: preprocessingResult.filter_reason,
+          },
+        });
+      }
       return;
     }
 
@@ -742,7 +716,6 @@ async function processLanguageIndependently(
     // }
 
     // Step 4: 번역 (단일 언어)
-    const translationStartTime = performance.now();
     const grpcResult = await cacheGrpcService.translate({
       text: preprocessingResult.preprocessed_text,
       source_lang: preprocessingResult.detected_language,
@@ -752,7 +725,6 @@ async function processLanguageIndependently(
       translator_name: "vllm",
     });
 
-    const translationDuration = performance.now() - translationStartTime;
     const totalDuration = performance.now() - startTime;
 
     // Step 5: 번역 완료 브로드캐스트
@@ -765,46 +737,20 @@ async function processLanguageIndependently(
             language: targetLang,
             translation: grpcResult.translations[targetLang],
             cacheHit: grpcResult.cache_hits[targetLang] || false,
-            translation_ms: translationDuration,
             total_ms: totalDuration,
             // XLSX 로깅용 추가 정보
             originalText: preprocessingResult.original_text,
             preprocessedText: preprocessingResult.preprocessed_text,
             detectedLanguage: preprocessingResult.detected_language,
+            gateway_preprocessing_time_ms: gateway_preprocessing_time_ms,
             preprocessing_ms: preprocessingResult.preprocessing_time_ms,
             cache_processing_ms: grpcResult.processing_time_ms,
+            cache_lookup_time_ms: grpcResult.cache_lookup_time_ms,
+            llm_response_time_ms: grpcResult.llm_response_time_ms,
             metadata,
           },
         });
       }
-
-      // CSV 로깅
-      // xlsxLoggerService.logTranslation({
-      //   timestamp: new Date().toISOString(),
-      //   originalText: preprocessingResult.original_text,
-      //   preprocessedText: preprocessingResult.preprocessed_text,
-      //   detectedLanguage: preprocessingResult.detected_language,
-      //   translations: {
-      //     [targetLang]: grpcResult.translations[targetLang],
-      //   } as any,
-      //   timings: {
-      //     preprocessingMs: preprocessingResult.preprocessing_time_ms,
-      //     translationMs: translationDuration,
-      //     totalMs: totalDuration,
-      //   },
-      //   cacheHits: grpcResult.cache_hits[targetLang],
-      //   cacheProcessingMs: grpcResult.processing_time_ms,
-      //   filtered: false,
-      // });
-
-      // logger.info( // CPU 최적화: 로그 생략
-      //   {
-      //     jobId,
-      //     targetLang,
-      //     duration: totalDuration,
-      //   },
-      //   "Independent translation completed"
-      // );
     }
   } catch (error) {
     logger.error(

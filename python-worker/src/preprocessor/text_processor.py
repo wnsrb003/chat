@@ -418,9 +418,9 @@ class TextPreprocessor:
         # 8. 띄어쓰기 교정 (PyKoSpacing)
         if add_spacing:
             # PyKoSpacing을 사용한 띄어쓰기 교정
-            # text = self.add_spacing(text)
+            text = self.add_spacing(text)
             # kss를 사용한 띄어쓰기 교저
-            text = kss.correct_spacing(text)
+            # text = kss.correct_spacing(text)
 
         # 9. 욕설 필터링
         if filter_profanity:

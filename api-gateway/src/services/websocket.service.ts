@@ -3,9 +3,9 @@ import { Server } from "http";
 import { z } from "zod";
 import { queueService } from "./queue.service";
 import { cacheGrpcService } from "./cache-grpc.service";
-import { xlsxLoggerService } from "./xlsx-logger.service";
 import { logger } from "../utils/logger";
 import { randomUUID } from "crypto";
+import { filter } from "compression";
 
 const wsMessageSchema = z.object({
   type: z.enum(["translate", "ping"]),
@@ -187,36 +187,36 @@ export class WebSocketService {
       if (preprocessingResult.filtered) {
         logger.warn({ jobId, targetLang }, "Text filtered in preprocessing");
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({
-              type: "partial-error",
-              jobId,
-              data: {
-                language: targetLang,
-                error: "Text filtered",
-                reason: preprocessingResult.filter_reason,
-              },
-            })
-          );
+          // ws.send(
+          //   JSON.stringify({
+          //     type: "partial-error",
+          //     jobId,
+          //     data: {
+          //       language: targetLang,
+          //       error: "Text filtered",
+          //       reason: preprocessingResult.filter_reason,
+          //     },
+          //   })
+          // );
         }
         return;
       }
 
       // Step 3: 전처리 완료 전송
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({
-            type: "preprocessing-complete",
-            jobId,
-            data: {
-              language: targetLang,
-              originalText: preprocessingResult.original_text,
-              preprocessedText: preprocessingResult.preprocessed_text,
-              detectedLanguage: preprocessingResult.detected_language,
-              preprocessing_ms: preprocessingResult.preprocessing_time_ms,
-            },
-          })
-        );
+        // ws.send(
+        //   JSON.stringify({
+        //     type: "preprocessing-complete",
+        //     jobId,
+        //     data: {
+        //       language: targetLang,
+        //       originalText: preprocessingResult.original_text,
+        //       preprocessedText: preprocessingResult.preprocessed_text,
+        //       detectedLanguage: preprocessingResult.detected_language,
+        //       preprocessing_ms: preprocessingResult.preprocessing_time_ms,
+        //     },
+        //   })
+        // );
       }
 
       // Step 4: 번역 (단일 언어)
@@ -230,7 +230,6 @@ export class WebSocketService {
         translator_name: "vllm",
       });
 
-      const translationDuration = performance.now() - translationStartTime;
       const totalDuration = performance.now() - startTime;
 
       // Step 5: 번역 완료 전송
@@ -244,37 +243,22 @@ export class WebSocketService {
                 language: targetLang,
                 translation: grpcResult.translations[targetLang],
                 cacheHit: grpcResult.cache_hits[targetLang] || false,
-                translation_ms: translationDuration,
-                total_ms: totalDuration,
+                // translation_ms: translationDuration,
                 // XLSX 로깅용 추가 정보
                 originalText: preprocessingResult.original_text,
                 preprocessedText: preprocessingResult.preprocessed_text,
                 detectedLanguage: preprocessingResult.detected_language,
+                total_ms: totalDuration,
                 preprocessing_ms: preprocessingResult.preprocessing_time_ms,
                 cache_processing_ms: grpcResult.processing_time_ms,
+                cache_look_up_ms: grpcResult.cache_lookup_time_ms,
+                llm_response_ms: grpcResult.llm_response_time_ms,
+                filtered: preprocessingResult.filtered,
+                filter_reason: preprocessingResult.filter_reason,
               },
             })
           );
         }
-
-        // CSV 로깅
-        xlsxLoggerService.logTranslation({
-          timestamp: new Date().toISOString(),
-          originalText: preprocessingResult.original_text,
-          preprocessedText: preprocessingResult.preprocessed_text,
-          detectedLanguage: preprocessingResult.detected_language,
-          translations: {
-            [targetLang]: grpcResult.translations[targetLang],
-          } as any,
-          timings: {
-            preprocessingMs: preprocessingResult.preprocessing_time_ms,
-            translationMs: translationDuration,
-            totalMs: totalDuration,
-          },
-          cacheHits: grpcResult.cache_hits[targetLang] || false,
-          cacheProcessingMs: grpcResult.processing_time_ms,
-          filtered: false,
-        });
 
         logger.info(
           {

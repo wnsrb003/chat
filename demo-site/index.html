@@ -26,13 +26,18 @@
                   원본 채팅
                 </button>
                 <button class="chat-btn" data-chat="rag">rag 용 채팅</button>
+                <button class="chat-btn" data-chat="vs4b">
+                  번역 품질용 채팅
+                </button>
               </div>
             </div>
 
             <div class="lang-selector">
               <label>번역 언어 (하나만 선택):</label>
               <div class="lang-buttons">
-                <button class="lang-btn active" data-lang="en">🇺🇸 English</button>
+                <button class="lang-btn active" data-lang="en">
+                  🇺🇸 English
+                </button>
                 <button class="lang-btn" data-lang="th">🇹🇭 ไทย</button>
                 <button class="lang-btn" data-lang="zh-CN">🇨🇳 简体</button>
                 <button class="lang-btn" data-lang="zh-TW">🇹🇼 繁體</button>
@@ -77,7 +82,9 @@
                 ⏸ 정지
               </button>
               <button class="action-btn clear" id="clearBtn">🗑 초기화</button>
-              <button class="action-btn download" id="downloadXlsxBtn">📥 XLSX 다운로드</button>
+              <button class="action-btn download" id="downloadXlsxBtn">
+                📥 XLSX 다운로드
+              </button>
             </div>
 
             <div class="speed-control">
@@ -86,7 +93,7 @@
                 type="range"
                 id="speedSlider"
                 min="50"
-                max="2000"
+                max="5000"
                 value="500"
                 step="50"
               />
@@ -135,6 +142,7 @@
 
     <script src="chat-data.js"></script>
     <script src="service-chat-data.js"></script>
+    <script src="vs-4b-data.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

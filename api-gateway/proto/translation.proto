@@ -6,16 +6,16 @@ package translation;
 service TranslationService {
     // Translate a single text
     rpc Translate(TranslateRequest) returns (TranslateResponse);
-
+    
     // Translate multiple texts in batch
     rpc BatchTranslate(BatchTranslateRequest) returns (BatchTranslateResponse);
-
+    
     // Get cache statistics
     rpc GetCacheStats(CacheStatsRequest) returns (CacheStatsResponse);
-
+    
     // Clear cache
     rpc ClearCache(ClearCacheRequest) returns (ClearCacheResponse);
-
+    
     // Health check
     rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
@@ -39,6 +39,8 @@ message TranslateResponse {
     double processing_time_ms = 5;
     bool success = 6;
     string error_message = 7;
+    double cache_lookup_time_ms = 8;  // Cache lookup time
+    map<string, double> llm_response_time_ms = 9;  // LLM response time per language
 }
 
 // Batch translation request

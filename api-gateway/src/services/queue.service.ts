@@ -113,9 +113,7 @@ class QueueService {
         logger.error({ err }, "Failed to subscribe to preprocessing channel");
         return;
       }
-      logger.info(
-        `Subscribed to ${PREPROCESSING_CHANNEL} (${count} channels)`
-      );
+      logger.info(`Subscribed to ${PREPROCESSING_CHANNEL} (${count} channels)`);
     });
 
     redisSub.on("message", async (channel, message) => {
@@ -147,7 +145,10 @@ class QueueService {
               )
               .catch((error) => {
                 // 이미 completed 상태이거나 타이밍 이슈로 실패할 수 있음 (무시해도 됨)
-                logger.debug({ error, jobId }, "Job already completed or moved");
+                logger.debug(
+                  { error, jobId },
+                  "Job already completed or moved"
+                );
               });
           }
 
@@ -189,10 +190,7 @@ class QueueService {
           }
         }
       } catch (err) {
-        logger.error(
-          { err },
-          "Error processing Python preprocessing message"
-        );
+        logger.error({ err }, "Error processing Python preprocessing message");
       }
     });
   }
@@ -212,24 +210,6 @@ class QueueService {
 
   async getJob(jobId: string): Promise<Job<TranslationJob> | null> {
     return this.queue.getJob(jobId);
-  }
-
-  async waitForResult(
-    jobId: string,
-    timeout: number = config.queue.timeout
-  ): Promise<TranslationResult> {
-    const job = await this.getJob(jobId);
-    // logger.info({ jobId, job }, "Waiting for result");
-    // console.log(job, jobId, "@@@");
-    if (!job) {
-      throw new Error(`Job ${jobId} not found`);
-    }
-    return Promise.race([
-      job.finished() as Promise<TranslationResult>,
-      new Promise<TranslationResult>((_, reject) =>
-        setTimeout(() => reject(new Error("Job timeout")), timeout)
-      ),
-    ]);
   }
 
   /**
@@ -252,10 +232,7 @@ class QueueService {
         this.preprocessingResolvers.set(jobId, resolve);
       }),
       new Promise<PreprocessingResult>((_, reject) =>
-        setTimeout(
-          () => reject(new Error("Preprocessing timeout")),
-          timeout
-        )
+        setTimeout(() => reject(new Error("Preprocessing timeout")), timeout)
       ),
     ]);
   }
