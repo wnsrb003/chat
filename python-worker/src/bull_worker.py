@@ -145,10 +145,19 @@ def complete_job(redis_conn: Redis, queue_name: str, job_id: str, result: dict):
 
     logger.debug(f"Publishing preprocessing result for job {job_id}")
 
-    # ✨ active 리스트에서 제거 (중요! 안하면 계속 쌓임)
-    redis_conn.lrem(f"bull:{queue_name}:active", 0, job_id)
+    job_key = f"bull:{queue_name}:{job_id}"
 
-    # 전처리 결과를 API Gateway로 전달
+    # 1. 결과 저장 (Bull 호환)
+    redis_conn.hset(job_key, 'returnvalue', json.dumps(result, ensure_ascii=False))
+
+    # 2. 상태 업데이트
+    redis_conn.hset(job_key, 'finishedOn', int(time.time() * 1000))
+
+    # 3. active에서 제거하고 completed로 이동
+    redis_conn.lrem(f"bull:{queue_name}:active", 0, job_id)
+    redis_conn.zadd(f"bull:{queue_name}:completed", {job_id: time.time() * 1000})
+
+    # 4. 전처리 결과를 API Gateway로 전달
     redis_conn.publish(
         "bull:preprocessing-results:jobId",
         json.dumps({
