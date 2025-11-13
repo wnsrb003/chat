@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RPS Monitor - Translation Service</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1800px;
+      margin: 0 auto;
+    }
+
+    .header {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .header-left h1 {
+      font-size: 28px;
+      color: #2d3748;
+      margin-bottom: 8px;
+    }
+
+    .header-left .subtitle {
+      color: #718096;
+      font-size: 14px;
+    }
+
+    .header-right {
+      display: flex;
+      gap: 12px;
+    }
+
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+
+    .btn-success {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: white;
+    }
+
+    .btn-success:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .stat-card {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+      transition: transform 0.2s, box-shadow 0.2s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+    }
+
+    .stat-card.api-gateway::before { background: linear-gradient(90deg, #3b82f6, #2563eb); }
+    .stat-card.queue::before { background: linear-gradient(90deg, #f59e0b, #d97706); }
+    .stat-card.websocket::before { background: linear-gradient(90deg, #8b5cf6, #7c3aed); }
+    .stat-card.cache-grpc::before { background: linear-gradient(90deg, #ec4899, #db2777); }
+    .stat-card.worker::before { background: linear-gradient(90deg, #10b981, #059669); }
+
+    .stat-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    }
+
+    .stat-card .label {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #718096;
+      margin-bottom: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .stat-card .value {
+      font-size: 48px;
+      font-weight: 700;
+      color: #2d3748;
+      line-height: 1;
+      margin-bottom: 8px;
+    }
+
+    .stat-card .unit {
+      font-size: 14px;
+      color: #a0aec0;
+    }
+
+    .stat-card .trend {
+      font-size: 12px;
+      margin-top: 8px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+
+    .trend.up {
+      background: #d1fae5;
+      color: #065f46;
+    }
+
+    .trend.down {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .trend.stable {
+      background: #e0e7ff;
+      color: #3730a3;
+    }
+
+    .chart-container {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    }
+
+    .chart-container h2 {
+      font-size: 18px;
+      color: #2d3748;
+      margin-bottom: 20px;
+      font-weight: 600;
+    }
+
+    canvas {
+      max-height: 400px;
+    }
+
+    .bottleneck-alert {
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+      border-left: 4px solid #f59e0b;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 20px;
+      display: none;
+    }
+
+    .bottleneck-alert.active {
+      display: block;
+      animation: shake 0.5s;
+    }
+
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-5px); }
+      75% { transform: translateX(5px); }
+    }
+
+    .bottleneck-alert h3 {
+      color: #92400e;
+      font-size: 16px;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    .bottleneck-alert p {
+      color: #78350f;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .refresh-info {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+      color: #718096;
+      font-size: 13px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    }
+
+    .refresh-info .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      background: #10b981;
+      border-radius: 50%;
+      margin-right: 8px;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .status-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+
+    .status-indicator.healthy {
+      background: #10b981;
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+    }
+
+    .status-indicator.warning {
+      background: #f59e0b;
+      box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+    }
+
+    .status-indicator.critical {
+      background: #ef4444;
+      box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+    }
+
+    .metrics-detail {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .detail-card {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    }
+
+    .detail-card h3 {
+      font-size: 16px;
+      color: #2d3748;
+      margin-bottom: 16px;
+      font-weight: 600;
+    }
+
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .metric-row:last-child {
+      border-bottom: none;
+    }
+
+    .metric-label {
+      color: #718096;
+      font-size: 14px;
+    }
+
+    .metric-value {
+      color: #2d3748;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    @media (max-width: 1200px) {
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .metrics-detail {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .stats-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .header {
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .header-right {
+        width: 100%;
+        flex-direction: column;
+      }
+
+      .btn {
+        width: 100%;
+        justify-content: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="header-left">
+        <h1>📊 RPS Monitor</h1>
+        <p class="subtitle">Real-time Performance Monitoring - Translation Service</p>
+      </div>
+      <div class="header-right">
+        <button class="btn btn-success" onclick="exportToExcel()">
+          📥 Export to Excel
+        </button>
+        <button class="btn btn-primary" onclick="clearData()">
+          🔄 Clear Data
+        </button>
+      </div>
+    </div>
+
+    <div class="bottleneck-alert" id="bottleneckAlert">
+      <h3>⚠️ Performance Bottleneck Detected</h3>
+      <p id="bottleneckMessage"></p>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card api-gateway">
+        <div class="label">
+          <span class="status-indicator healthy" id="statusApiGateway"></span>
+          🌐 API Gateway
+        </div>
+        <div class="value" id="rpsApiGateway">-</div>
+        <div class="unit">requests/second</div>
+        <div class="trend stable" id="trendApiGateway">-</div>
+      </div>
+
+      <div class="stat-card queue">
+        <div class="label">
+          <span class="status-indicator healthy" id="statusQueue"></span>
+          📦 Queue Service
+        </div>
+        <div class="value" id="rpsQueue">-</div>
+        <div class="unit">jobs/second</div>
+        <div class="trend stable" id="trendQueue">-</div>
+      </div>
+
+      <div class="stat-card websocket">
+        <div class="label">
+          <span class="status-indicator healthy" id="statusWebSocket"></span>
+          🔌 WebSocket
+        </div>
+        <div class="value" id="rpsWebSocket">-</div>
+        <div class="unit">translations/second</div>
+        <div class="trend stable" id="trendWebSocket">-</div>
+      </div>
+
+      <div class="stat-card cache-grpc">
+        <div class="label">
+          <span class="status-indicator healthy" id="statusCacheGrpc"></span>
+          🔄 Cache gRPC
+        </div>
+        <div class="value" id="rpsCacheGrpc">-</div>
+        <div class="unit">requests/second</div>
+        <div class="trend stable" id="trendCacheGrpc">-</div>
+      </div>
+
+      <div class="stat-card worker">
+        <div class="label">
+          <span class="status-indicator healthy" id="statusWorker"></span>
+          ⚙️ Python Worker
+        </div>
+        <div class="value" id="rpsWorker">-</div>
+        <div class="unit">preprocessing/second</div>
+        <div class="trend stable" id="trendWorker">-</div>
+      </div>
+    </div>
+
+    <div class="metrics-detail">
+      <div class="detail-card">
+        <h3>🔄 Queue Metrics</h3>
+        <div class="metric-row">
+          <span class="metric-label">Queue Add RPS</span>
+          <span class="metric-value" id="queueAddRps">-</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Preprocessing Complete RPS</span>
+          <span class="metric-value" id="preprocessingCompleteRps">-</span>
+        </div>
+      </div>
+
+      <div class="detail-card">
+        <h3>🔌 WebSocket Metrics</h3>
+        <div class="metric-row">
+          <span class="metric-label">Active Connections</span>
+          <span class="metric-value" id="wsConnections">-</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Translate Request RPS</span>
+          <span class="metric-value" id="wsTranslateRps">-</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Translation Complete RPS</span>
+          <span class="metric-value" id="wsTranslationCompleteRps">-</span>
+        </div>
+      </div>
+
+      <div class="detail-card">
+        <h3>🔄 Cache gRPC Metrics</h3>
+        <div class="metric-row">
+          <span class="metric-label">gRPC Request RPS</span>
+          <span class="metric-value" id="cacheGrpcRequestRps">-</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">gRPC Response RPS</span>
+          <span class="metric-value" id="cacheGrpcResponseRps">-</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">gRPC Complete RPS</span>
+          <span class="metric-value" id="cacheGrpcCompleteRps">-</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">gRPC Error RPS</span>
+          <span class="metric-value" id="cacheGrpcErrorRps">-</span>
+        </div>
+      </div>
+
+      <div class="detail-card">
+        <h3>⚙️ Worker Metrics</h3>
+        <div class="metric-row">
+          <span class="metric-label">Job Processing RPS</span>
+          <span class="metric-value" id="workerProcessingRps">-</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Preprocessing Complete RPS</span>
+          <span class="metric-value" id="workerCompleteRps">-</span>
+        </div>
+      </div>
+
+      <div class="detail-card">
+        <h3>📈 System Health</h3>
+        <div class="metric-row">
+          <span class="metric-label">Total Throughput</span>
+          <span class="metric-value" id="totalThroughput">-</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Peak RPS (Last 60s)</span>
+          <span class="metric-value" id="peakRps">-</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Data Points Collected</span>
+          <span class="metric-value" id="dataPoints">0</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-container">
+      <h2>📈 Real-time RPS Chart (Last 60 seconds)</h2>
+      <canvas id="rpsChart"></canvas>
+    </div>
+
+    <div class="refresh-info">
+      <span class="dot"></span>
+      Auto-refreshing every 1 second • Target: 2400 RPS
+    </div>
+  </div>
+
+  <script>
+    const API_URL = 'http://localhost:3000/api/v1/rps/stats';
+    const MAX_DATA_POINTS = 60;
+    const TARGET_RPS = 2400;
+
+    // Data storage
+    const timeLabels = [];
+    const rpsData = {
+      apiGateway: [],
+      queue: [],
+      websocket: [],
+      cacheGrpc: [],
+      worker: []
+    };
+
+    const allMetrics = []; // For Excel export
+
+    // Chart setup
+    const ctx = document.getElementById('rpsChart').getContext('2d');
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: timeLabels,
+        datasets: [
+          {
+            label: 'API Gateway',
+            data: rpsData.apiGateway,
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            tension: 0.4,
+            borderWidth: 2,
+            pointRadius: 0
+          },
+          {
+            label: 'Queue Service',
+            data: rpsData.queue,
+            borderColor: '#f59e0b',
+            backgroundColor: 'rgba(245, 158, 11, 0.1)',
+            tension: 0.4,
+            borderWidth: 2,
+            pointRadius: 0
+          },
+          {
+            label: 'WebSocket',
+            data: rpsData.websocket,
+            borderColor: '#8b5cf6',
+            backgroundColor: 'rgba(139, 92, 246, 0.1)',
+            tension: 0.4,
+            borderWidth: 2,
+            pointRadius: 0
+          },
+          {
+            label: 'Cache gRPC',
+            data: rpsData.cacheGrpc,
+            borderColor: '#ec4899',
+            backgroundColor: 'rgba(236, 72, 153, 0.1)',
+            tension: 0.4,
+            borderWidth: 2,
+            pointRadius: 0
+          },
+          {
+            label: 'Python Worker',
+            data: rpsData.worker,
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            tension: 0.4,
+            borderWidth: 2,
+            pointRadius: 0
+          },
+          {
+            label: 'Target (2400 RPS)',
+            data: Array(MAX_DATA_POINTS).fill(TARGET_RPS),
+            borderColor: '#ef4444',
+            borderDash: [5, 5],
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: false
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {
+          intersect: false,
+          mode: 'index'
+        },
+        plugins: {
+          legend: {
+            display: true,
+            position: 'top'
+          },
+          tooltip: {
+            enabled: true,
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            padding: 12,
+            titleFont: {
+              size: 14
+            },
+            bodyFont: {
+              size: 13
+            }
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            title: {
+              display: true,
+              text: 'Requests per Second'
+            },
+            grid: {
+              color: 'rgba(0, 0, 0, 0.05)'
+            }
+          },
+          x: {
+            title: {
+              display: true,
+              text: 'Time'
+            },
+            grid: {
+              color: 'rgba(0, 0, 0, 0.05)'
+            }
+          }
+        }
+      }
+    });
+
+    let previousStats = null;
+
+    async function fetchStats() {
+      try {
+        const response = await fetch(API_URL);
+        const result = await response.json();
+
+        if (result.success) {
+          updateStats(result.data);
+          updateChart(result.data);
+          checkBottlenecks(result.data);
+          storeMetrics(result.data);
+        }
+      } catch (error) {
+        console.error('Failed to fetch stats:', error);
+      }
+    }
+
+    function updateStats(data) {
+      // Update main RPS values
+      document.getElementById('rpsApiGateway').textContent = data.apiGateway || 0;
+      document.getElementById('rpsQueue').textContent = data.queue.add || 0;
+      document.getElementById('rpsWebSocket').textContent = data.websocket.translateRequest || 0;
+      document.getElementById('rpsCacheGrpc').textContent = data.cacheGrpc.request || 0;
+      document.getElementById('rpsWorker').textContent = data.worker.processing || 0;
+
+      // Update detail metrics
+      document.getElementById('queueAddRps').textContent = data.queue.add || 0;
+      document.getElementById('preprocessingCompleteRps').textContent = data.queue.preprocessingComplete || 0;
+
+      document.getElementById('wsConnections').textContent = data.websocket.connections || 0;
+      document.getElementById('wsTranslateRps').textContent = data.websocket.translateRequest || 0;
+      document.getElementById('wsTranslationCompleteRps').textContent = data.websocket.translationComplete || 0;
+
+      document.getElementById('cacheGrpcRequestRps').textContent = data.cacheGrpc.request || 0;
+      document.getElementById('cacheGrpcResponseRps').textContent = data.cacheGrpc.response || 0;
+      document.getElementById('cacheGrpcCompleteRps').textContent = data.cacheGrpc.complete || 0;
+      document.getElementById('cacheGrpcErrorRps').textContent = data.cacheGrpc.error || 0;
+
+      document.getElementById('workerProcessingRps').textContent = data.worker.processing || 0;
+      document.getElementById('workerCompleteRps').textContent = data.worker.complete || 0;
+
+      // Update system health
+      const totalThroughput = (data.apiGateway || 0) + (data.queue.add || 0) + (data.cacheGrpc.request || 0) + (data.worker.processing || 0);
+      document.getElementById('totalThroughput').textContent = totalThroughput;
+
+      // Calculate peak RPS
+      const peakRps = Math.max(
+        ...rpsData.apiGateway.slice(-60),
+        ...rpsData.queue.slice(-60),
+        ...rpsData.websocket.slice(-60),
+        ...rpsData.cacheGrpc.slice(-60),
+        ...rpsData.worker.slice(-60)
+      );
+      document.getElementById('peakRps').textContent = peakRps || 0;
+
+      document.getElementById('dataPoints').textContent = allMetrics.length;
+
+      // Update trends and status
+      updateTrendAndStatus('ApiGateway', data.apiGateway, previousStats?.apiGateway);
+      updateTrendAndStatus('Queue', data.queue.add, previousStats?.queue?.add);
+      updateTrendAndStatus('WebSocket', data.websocket.translateRequest, previousStats?.websocket?.translateRequest);
+      updateTrendAndStatus('CacheGrpc', data.cacheGrpc.request, previousStats?.cacheGrpc?.request);
+      updateTrendAndStatus('Worker', data.worker.processing, previousStats?.worker?.processing);
+
+      previousStats = data;
+    }
+
+    function updateTrendAndStatus(name, current, previous) {
+      const trendElement = document.getElementById(`trend${name}`);
+      const statusElement = document.getElementById(`status${name}`);
+
+      if (previous !== undefined && previous !== null) {
+        const change = current - previous;
+        const changePercent = previous > 0 ? ((change / previous) * 100).toFixed(1) : 0;
+
+        if (change > 0) {
+          trendElement.className = 'trend up';
+          trendElement.textContent = `↗ +${changePercent}%`;
+        } else if (change < 0) {
+          trendElement.className = 'trend down';
+          trendElement.textContent = `↘ ${changePercent}%`;
+        } else {
+          trendElement.className = 'trend stable';
+          trendElement.textContent = '→ Stable';
+        }
+      } else {
+        trendElement.className = 'trend stable';
+        trendElement.textContent = '→ Initializing';
+      }
+
+      // Update status indicator
+      if (current >= TARGET_RPS * 0.8) {
+        statusElement.className = 'status-indicator healthy';
+      } else if (current >= TARGET_RPS * 0.5) {
+        statusElement.className = 'status-indicator warning';
+      } else {
+        statusElement.className = 'status-indicator critical';
+      }
+    }
+
+    function updateChart(data) {
+      const now = new Date();
+      const timeLabel = now.toLocaleTimeString();
+
+      // Add new data
+      timeLabels.push(timeLabel);
+      rpsData.apiGateway.push(data.apiGateway || 0);
+      rpsData.queue.push(data.queue.add || 0);
+      rpsData.websocket.push(data.websocket.translateRequest || 0);
+      rpsData.cacheGrpc.push(data.cacheGrpc.request || 0);
+      rpsData.worker.push(data.worker.processing || 0);
+
+      // Keep only last MAX_DATA_POINTS
+      if (timeLabels.length > MAX_DATA_POINTS) {
+        timeLabels.shift();
+        rpsData.apiGateway.shift();
+        rpsData.queue.shift();
+        rpsData.websocket.shift();
+        rpsData.cacheGrpc.shift();
+        rpsData.worker.shift();
+      }
+
+      chart.update('none'); // Update without animation for better performance
+    }
+
+    function checkBottlenecks(data) {
+      const alert = document.getElementById('bottleneckAlert');
+      const message = document.getElementById('bottleneckMessage');
+      const bottlenecks = [];
+
+      // Check each stage
+      const apiGatewayRps = data.apiGateway || 0;
+      const queueAddRps = data.queue.add || 0;
+      const workerRps = data.worker.processing || 0;
+      const wsRps = data.websocket.translateRequest || 0;
+
+      // Find bottleneck
+      if (apiGatewayRps > 0) {
+        if (queueAddRps < apiGatewayRps * 0.8) {
+          bottlenecks.push(`🚨 Queue Service bottleneck: Queue add RPS (${queueAddRps}) is significantly lower than API Gateway RPS (${apiGatewayRps})`);
+        }
+
+        if (workerRps < queueAddRps * 0.8) {
+          bottlenecks.push(`🚨 Python Worker bottleneck: Worker processing RPS (${workerRps}) is significantly lower than Queue add RPS (${queueAddRps}). Consider increasing worker concurrency.`);
+        }
+
+        if (wsRps < TARGET_RPS && apiGatewayRps < TARGET_RPS) {
+          bottlenecks.push(`⚠️ Overall throughput (${Math.max(apiGatewayRps, wsRps)}) is below target (${TARGET_RPS} RPS). Scale up infrastructure.`);
+        }
+      }
+
+      // Check if preprocessing is backing up
+      const preprocessingBacklog = (data.queue.add || 0) - (data.queue.preprocessingComplete || 0);
+      if (preprocessingBacklog > 100) {
+        bottlenecks.push(`⚠️ Preprocessing backlog detected: ${preprocessingBacklog} jobs/second difference between queue add and preprocessing complete.`);
+      }
+
+      if (bottlenecks.length > 0) {
+        alert.classList.add('active');
+        message.innerHTML = bottlenecks.map(b => `• ${b}`).join('<br>');
+      } else {
+        alert.classList.remove('active');
+      }
+    }
+
+    function storeMetrics(data) {
+      allMetrics.push({
+        timestamp: new Date().toISOString(),
+        apiGateway: data.apiGateway || 0,
+        queueAdd: data.queue.add || 0,
+        queuePreprocessingComplete: data.queue.preprocessingComplete || 0,
+        wsConnections: data.websocket.connections || 0,
+        wsTranslateRequest: data.websocket.translateRequest || 0,
+        wsTranslationComplete: data.websocket.translationComplete || 0,
+        cacheGrpcRequest: data.cacheGrpc.request || 0,
+        cacheGrpcResponse: data.cacheGrpc.response || 0,
+        cacheGrpcComplete: data.cacheGrpc.complete || 0,
+        cacheGrpcError: data.cacheGrpc.error || 0,
+        workerProcessing: data.worker.processing || 0,
+        workerComplete: data.worker.complete || 0
+      });
+
+      // Keep only last 3600 data points (1 hour at 1 second intervals)
+      if (allMetrics.length > 3600) {
+        allMetrics.shift();
+      }
+    }
+
+    function exportToExcel() {
+      if (allMetrics.length === 0) {
+        alert('No data to export yet. Please wait for data collection.');
+        return;
+      }
+
+      // Create worksheet
+      const ws = XLSX.utils.json_to_sheet(allMetrics);
+
+      // Create workbook
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'RPS Metrics');
+
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+      const filename = `rps-metrics-${timestamp}.xlsx`;
+
+      // Save file
+      XLSX.writeFile(wb, filename);
+    }
+
+    function clearData() {
+      if (confirm('Are you sure you want to clear all collected data?')) {
+        timeLabels.length = 0;
+        rpsData.apiGateway.length = 0;
+        rpsData.queue.length = 0;
+        rpsData.websocket.length = 0;
+        rpsData.cacheGrpc.length = 0;
+        rpsData.worker.length = 0;
+        allMetrics.length = 0;
+        chart.update();
+
+        document.getElementById('dataPoints').textContent = 0;
+      }
+    }
+
+    // Initial fetch
+    fetchStats();
+
+    // Auto-refresh every 1 second
+    setInterval(fetchStats, 1000);
+  </script>
+</body>
+</html>

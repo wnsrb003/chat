@@ -49,6 +49,16 @@ class CacheGrpcService {
   private client: any;
   private readonly timeout: number;
 
+  // RPS 모니터링
+  private translateRequestCounter = 0;
+  private translateResponseCounter = 0; // complete + error (총 응답 수)
+  private translateCompleteCounter = 0;
+  private translateErrorCounter = 0;
+  private lastTranslateRequestRps = 0;
+  private lastTranslateResponseRps = 0;
+  private lastTranslateCompleteRps = 0;
+  private lastTranslateErrorRps = 0;
+
   constructor() {
     // gRPC 채널 생성 (connection pooling 자동 관리)
     this.client = new translationProto.TranslationService(
@@ -57,6 +67,19 @@ class CacheGrpcService {
     );
 
     this.timeout = config.cacheService.timeout;
+
+    // RPS 모니터링 (1초마다)
+    setInterval(() => {
+      this.lastTranslateRequestRps = this.translateRequestCounter;
+      this.lastTranslateResponseRps = this.translateResponseCounter;
+      this.lastTranslateCompleteRps = this.translateCompleteCounter;
+      this.lastTranslateErrorRps = this.translateErrorCounter;
+
+      this.translateRequestCounter = 0;
+      this.translateResponseCounter = 0;
+      this.translateCompleteCounter = 0;
+      this.translateErrorCounter = 0;
+    }, 1000);
 
     logger.info({
       msg: "CacheGrpcService initialized",
@@ -69,6 +92,8 @@ class CacheGrpcService {
    * 번역 요청 (Promise 기반 비동기)
    */
   async translate(params: TranslateParams): Promise<TranslationResult> {
+    this.translateRequestCounter++; // RPS 카운터
+
     const startTime = Date.now();
 
     const request = {
@@ -95,6 +120,8 @@ class CacheGrpcService {
           const duration = Date.now() - startTime;
 
           if (error) {
+            this.translateResponseCounter++; // 응답 카운터 (에러도 응답)
+            this.translateErrorCounter++; // 에러 카운터
             logger.error({
               msg: "gRPC Translate error",
               error: error.message,
@@ -104,6 +131,9 @@ class CacheGrpcService {
             reject(error);
             return;
           }
+
+          this.translateResponseCounter++; // 응답 카운터 (성공)
+          this.translateCompleteCounter++; // 완료 카운터
 
           logger.debug({
             msg: "gRPC Translate response",
@@ -231,6 +261,18 @@ class CacheGrpcService {
       grpc.closeClient(this.client);
       logger.info("CacheGrpcService connection closed");
     }
+  }
+
+  /**
+   * RPS 메트릭 조회
+   */
+  getRpsMetrics() {
+    return {
+      request: this.lastTranslateRequestRps,
+      response: this.lastTranslateResponseRps, // 총 응답 (complete + error)
+      complete: this.lastTranslateCompleteRps,
+      error: this.lastTranslateErrorRps,
+    };
   }
 }
 

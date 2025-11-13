@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RPS Load Test - Translation Service</title>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .header {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    }
+
+    .header h1 {
+      font-size: 28px;
+      color: #2d3748;
+      margin-bottom: 8px;
+    }
+
+    .header .subtitle {
+      color: #718096;
+      font-size: 14px;
+    }
+
+    .control-panel {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    }
+
+    .control-panel h2 {
+      font-size: 20px;
+      color: #2d3748;
+      margin-bottom: 20px;
+    }
+
+    .control-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .control-group label {
+      font-size: 14px;
+      font-weight: 600;
+      color: #4a5568;
+    }
+
+    .control-group input,
+    .control-group select {
+      padding: 12px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: border-color 0.2s;
+    }
+
+    .control-group input:focus,
+    .control-group select:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .rps-presets {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+
+    .preset-btn {
+      padding: 8px 16px;
+      border: 2px solid #e2e8f0;
+      background: white;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .preset-btn:hover {
+      border-color: #667eea;
+      background: #f7fafc;
+    }
+
+    .preset-btn.active {
+      border-color: #667eea;
+      background: #667eea;
+      color: white;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .btn {
+      padding: 14px 28px;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: white;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+    }
+
+    .btn-danger {
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+      color: white;
+    }
+
+    .btn-danger:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+    }
+
+    .btn-secondary {
+      background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+      color: white;
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .stat-card {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+      border-left: 4px solid #667eea;
+    }
+
+    .stat-card.success { border-left-color: #10b981; }
+    .stat-card.error { border-left-color: #ef4444; }
+    .stat-card.warning { border-left-color: #f59e0b; }
+
+    .stat-card .label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #718096;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    .stat-card .value {
+      font-size: 36px;
+      font-weight: 700;
+      color: #2d3748;
+      line-height: 1;
+    }
+
+    .stat-card .unit {
+      font-size: 13px;
+      color: #a0aec0;
+      margin-top: 4px;
+    }
+
+    .log-panel {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    }
+
+    .log-panel h2 {
+      font-size: 18px;
+      color: #2d3748;
+      margin-bottom: 16px;
+    }
+
+    .log-container {
+      background: #1a202c;
+      border-radius: 8px;
+      padding: 16px;
+      max-height: 400px;
+      overflow-y: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+    }
+
+    .log-entry {
+      color: #e2e8f0;
+      margin-bottom: 4px;
+      line-height: 1.6;
+    }
+
+    .log-entry.info { color: #60a5fa; }
+    .log-entry.success { color: #34d399; }
+    .log-entry.error { color: #f87171; }
+    .log-entry.warning { color: #fbbf24; }
+
+    .log-timestamp {
+      color: #9ca3af;
+      margin-right: 8px;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: #e2e8f0;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 12px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #10b981, #059669);
+      width: 0%;
+      transition: width 0.3s;
+    }
+
+    .status-indicator {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+
+    .status-indicator.idle { background: #9ca3af; }
+    .status-indicator.running {
+      background: #10b981;
+      animation: pulse-status 2s infinite;
+    }
+    .status-indicator.error { background: #ef4444; }
+
+    @keyframes pulse-status {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .log-container::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .log-container::-webkit-scrollbar-track {
+      background: #2d3748;
+      border-radius: 4px;
+    }
+
+    .log-container::-webkit-scrollbar-thumb {
+      background: #4a5568;
+      border-radius: 4px;
+    }
+
+    .log-container::-webkit-scrollbar-thumb:hover {
+      background: #718096;
+    }
+
+    .file-input {
+      display: none;
+    }
+
+    .file-label {
+      padding: 12px 20px;
+      background: white;
+      border: 2px dashed #cbd5e0;
+      border-radius: 8px;
+      cursor: pointer;
+      display: inline-block;
+      transition: all 0.2s;
+      font-size: 14px;
+      color: #4a5568;
+    }
+
+    .file-label:hover {
+      border-color: #667eea;
+      background: #f7fafc;
+    }
+
+    .file-label.loaded {
+      border-color: #10b981;
+      background: #d1fae5;
+      color: #065f46;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🚀 RPS Load Test</h1>
+      <p class="subtitle">Translation Service Performance Testing with vs-4b.csv</p>
+    </div>
+
+    <div class="control-panel">
+      <h2>Test Configuration</h2>
+
+      <div class="control-grid">
+        <div class="control-group">
+          <label>CSV File (vs-4b.csv)</label>
+          <input type="file" id="csvFile" class="file-input" accept=".csv" />
+          <label for="csvFile" class="file-label" id="fileLabel">
+            📁 Click to load CSV file
+          </label>
+          <small style="color: #718096; margin-top: 4px;">Loaded: <span id="messageCount">0</span> messages</small>
+        </div>
+
+        <div class="control-group">
+          <label>Target RPS (Requests Per Second)</label>
+          <input type="number" id="targetRps" value="100" min="1" max="10000" />
+          <div class="rps-presets">
+            <button class="preset-btn" onclick="setRps(100)">100</button>
+            <button class="preset-btn" onclick="setRps(500)">500</button>
+            <button class="preset-btn" onclick="setRps(1000)">1000</button>
+            <button class="preset-btn" onclick="setRps(2000)">2000</button>
+            <button class="preset-btn active" onclick="setRps(2400)">2400</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label>Test Duration (seconds)</label>
+          <input type="number" id="duration" value="60" min="1" max="3600" />
+        </div>
+
+        <div class="control-group">
+          <label>Connection Type</label>
+          <select id="connectionType">
+            <option value="http">HTTP (/api/v1/broadcast)</option>
+            <option value="websocket" selected>WebSocket (/ws)</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <label>Target Languages</label>
+          <input type="text" id="targetLanguages" value="en,ja" placeholder="en,ja,zh-CN" />
+          <small style="color: #718096; margin-top: 4px;">Comma separated</small>
+        </div>
+
+        <div class="control-group">
+          <label>API URL</label>
+          <input type="text" id="apiUrl" value="http://localhost:3000" placeholder="http://localhost:3000" />
+        </div>
+      </div>
+
+      <div class="button-group">
+        <button class="btn btn-primary" id="startBtn" onclick="startTest()">
+          ▶️ Start Test
+        </button>
+        <button class="btn btn-danger" id="stopBtn" onclick="stopTest()" disabled>
+          ⏹️ Stop Test
+        </button>
+        <button class="btn btn-secondary" onclick="clearLogs()">
+          🗑️ Clear Logs
+        </button>
+      </div>
+
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressBar"></div>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="label">
+          <span class="status-indicator idle" id="statusIndicator"></span>
+          Status
+        </div>
+        <div class="value" id="statusText">Idle</div>
+        <div class="unit">Test Status</div>
+      </div>
+
+      <div class="stat-card success">
+        <div class="label">Requests Sent</div>
+        <div class="value" id="requestsSent">0</div>
+        <div class="unit">total requests</div>
+      </div>
+
+      <div class="stat-card success">
+        <div class="label">Successful</div>
+        <div class="value" id="successCount">0</div>
+        <div class="unit">responses</div>
+      </div>
+
+      <div class="stat-card error">
+        <div class="label">Failed</div>
+        <div class="value" id="errorCount">0</div>
+        <div class="unit">errors</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="label">Actual RPS</div>
+        <div class="value" id="actualRps">0</div>
+        <div class="unit">requests/second</div>
+      </div>
+
+      <div class="stat-card warning">
+        <div class="label">Elapsed Time</div>
+        <div class="value" id="elapsedTime">0</div>
+        <div class="unit">seconds</div>
+      </div>
+
+      <div class="stat-card" style="border-left-color: #f59e0b;">
+        <div class="label">Pending</div>
+        <div class="value" id="pendingCount">0</div>
+        <div class="unit">waiting response</div>
+      </div>
+
+      <div class="stat-card error">
+        <div class="label">Timeout</div>
+        <div class="value" id="timeoutCount">0</div>
+        <div class="unit">timed out</div>
+      </div>
+    </div>
+
+    <div class="log-panel">
+      <h2>📋 Test Logs</h2>
+      <div class="log-container" id="logContainer">
+        <div class="log-entry info">Ready to start test. Please load a CSV file and configure settings.</div>
+      </div>
+    </div>
+
+    <div class="log-panel">
+      <h2>💬 Translation Results (Latest 50)</h2>
+      <div class="log-container" id="translationResults" style="max-height: 300px;">
+        <div class="log-entry info">Translation results will appear here...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let chatMessages = [];
+    let testRunning = false;
+    let testStartTime = 0;
+    let requestsSent = 0;
+    let successCount = 0;
+    let errorCount = 0;
+    let timeoutCount = 0;
+    let intervalId = null;
+    let timerIntervalId = null;
+    let wsConnections = [];
+    let currentMessageIndex = 0;
+    let pendingRequests = new Map(); // jobId -> { timestamp, message }
+    let translationResults = [];
+    const REQUEST_TIMEOUT = 30000; // 30초 타임아웃
+
+    // Load CSV file
+    document.getElementById('csvFile').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (file) {
+        Papa.parse(file, {
+          header: true,
+          skipEmptyLines: true,
+          complete: function(results) {
+            chatMessages = results.data
+              .map(row => row['원문'])
+              .filter(text => text && text.trim().length > 0);
+
+            document.getElementById('messageCount').textContent = chatMessages.length;
+            document.getElementById('fileLabel').classList.add('loaded');
+            document.getElementById('fileLabel').textContent = `✅ ${file.name} (${chatMessages.length} messages)`;
+
+            addLog('success', `Loaded ${chatMessages.length} messages from ${file.name}`);
+          },
+          error: function(error) {
+            addLog('error', `Failed to parse CSV: ${error.message}`);
+          }
+        });
+      }
+    });
+
+    // Auto-load vs-4b.csv on page load
+    window.addEventListener('load', async function() {
+      try {
+        const response = await fetch('vs-4b.csv');
+        const csvText = await response.text();
+
+        Papa.parse(csvText, {
+          header: true,
+          skipEmptyLines: true,
+          complete: function(results) {
+            chatMessages = results.data
+              .map(row => row['원문'])
+              .filter(text => text && text.trim().length > 0);
+
+            document.getElementById('messageCount').textContent = chatMessages.length;
+            document.getElementById('fileLabel').classList.add('loaded');
+            document.getElementById('fileLabel').textContent = `✅ vs-4b.csv (${chatMessages.length} messages)`;
+
+            addLog('success', `Auto-loaded ${chatMessages.length} messages from vs-4b.csv`);
+          },
+          error: function(error) {
+            addLog('warning', 'Could not auto-load vs-4b.csv. Please load manually.');
+          }
+        });
+      } catch (error) {
+        addLog('warning', 'Could not auto-load vs-4b.csv. Please load manually.');
+      }
+    });
+
+    function setRps(rps) {
+      document.getElementById('targetRps').value = rps;
+      document.querySelectorAll('.preset-btn').forEach(btn => btn.classList.remove('active'));
+      event.target.classList.add('active');
+    }
+
+    function addLog(type, message) {
+      const logContainer = document.getElementById('logContainer');
+      const timestamp = new Date().toLocaleTimeString();
+      const logEntry = document.createElement('div');
+      logEntry.className = `log-entry ${type}`;
+      logEntry.innerHTML = `<span class="log-timestamp">[${timestamp}]</span>${message}`;
+      logContainer.appendChild(logEntry);
+      logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    function clearLogs() {
+      document.getElementById('logContainer').innerHTML = '';
+      addLog('info', 'Logs cleared');
+    }
+
+    function addTranslationResult(originalText, language, translation, duration, cacheHit) {
+      const resultsContainer = document.getElementById('translationResults');
+
+      // 최대 50개만 유지
+      const entries = resultsContainer.querySelectorAll('.log-entry');
+      if (entries.length > 50) {
+        entries[0].remove();
+      }
+
+      const resultEntry = document.createElement('div');
+      resultEntry.className = 'log-entry success';
+      resultEntry.innerHTML = `
+        <span style="color: #60a5fa;">[${language.toUpperCase()}]</span>
+        <span style="color: #e2e8f0;">"${originalText.substring(0, 30)}${originalText.length > 30 ? '...' : ''}"</span>
+        <span style="color: #10b981;">→</span>
+        <span style="color: #34d399;">"${translation.substring(0, 50)}${translation.length > 50 ? '...' : ''}"</span>
+        <span style="color: #9ca3af;">(${duration}ms ${cacheHit ? '💾' : '🔄'})</span>
+      `;
+      resultsContainer.appendChild(resultEntry);
+      resultsContainer.scrollTop = resultsContainer.scrollHeight;
+
+      translationResults.push({
+        original: originalText,
+        language: language,
+        translation: translation,
+        duration: duration,
+        cacheHit: cacheHit,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    function checkTimeouts() {
+      const now = Date.now();
+      const timeoutIds = [];
+
+      pendingRequests.forEach((data, jobId) => {
+        if (now - data.timestamp > REQUEST_TIMEOUT) {
+          timeoutIds.push(jobId);
+        }
+      });
+
+      if (timeoutIds.length > 0) {
+        timeoutIds.forEach(jobId => {
+          pendingRequests.delete(jobId);
+          errorCount++;
+          timeoutCount++;
+        });
+        addLog('warning', `${timeoutIds.length} requests timed out (>${REQUEST_TIMEOUT/1000}s)`);
+      }
+    }
+
+    function updateStats() {
+      document.getElementById('requestsSent').textContent = requestsSent;
+      document.getElementById('successCount').textContent = successCount;
+      document.getElementById('errorCount').textContent = errorCount;
+      document.getElementById('pendingCount').textContent = pendingRequests.size;
+      document.getElementById('timeoutCount').textContent = timeoutCount;
+
+      const elapsed = ((Date.now() - testStartTime) / 1000).toFixed(1);
+      document.getElementById('elapsedTime').textContent = elapsed;
+
+      const actualRps = elapsed > 0 ? (requestsSent / elapsed).toFixed(1) : 0;
+      document.getElementById('actualRps').textContent = actualRps;
+
+      const duration = parseInt(document.getElementById('duration').value);
+      const progress = Math.min((elapsed / duration) * 100, 100);
+      document.getElementById('progressBar').style.width = progress + '%';
+    }
+
+    async function sendHttpRequest(message, targetLanguages) {
+      const apiUrl = document.getElementById('apiUrl').value;
+
+      try {
+        const response = await fetch(`${apiUrl}/api/v1/broadcast`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            text: message,
+            targetLanguages: targetLanguages,
+            options: {
+              expandAbbreviations: true,
+              filterProfanity: false,
+              normalizeRepeats: true,
+              removeEmoticons: true,
+              fixTypos: false,
+            }
+          })
+        });
+
+        if (response.ok) {
+          successCount++;
+          return true;
+        } else {
+          errorCount++;
+          addLog('error', `HTTP Error: ${response.status} ${response.statusText}`);
+          return false;
+        }
+      } catch (error) {
+        errorCount++;
+        addLog('error', `Request failed: ${error.message}`);
+        return false;
+      }
+    }
+
+    function connectWebSocket() {
+      const apiUrl = document.getElementById('apiUrl').value;
+      const wsUrl = apiUrl.replace('http://', 'ws://').replace('https://', 'wss://');
+
+      const ws = new WebSocket(`${wsUrl}/ws`);
+
+      ws.onopen = () => {
+        addLog('success', `WebSocket connected: ${wsUrl}/ws`);
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.type === 'connected') {
+          // 연결 확인 메시지
+          return;
+        }
+
+        if (data.type === 'partial-translation' && data.jobId) {
+          // 요청 추적에서 제거
+          if (pendingRequests.has(data.jobId)) {
+            const requestData = pendingRequests.get(data.jobId);
+            const duration = Date.now() - requestData.timestamp;
+
+            successCount++;
+            pendingRequests.delete(data.jobId);
+
+            // 번역 결과 표시
+            addTranslationResult(
+              requestData.message,
+              data.data.language,
+              data.data.translation,
+              duration,
+              data.data.cacheHit
+            );
+          }
+        } else if (data.type === 'partial-error' && data.jobId) {
+          if (pendingRequests.has(data.jobId)) {
+            errorCount++;
+            pendingRequests.delete(data.jobId);
+            addLog('error', `Translation failed for ${data.jobId}: ${data.data?.message || 'Unknown error'}`);
+          }
+        }
+      };
+
+      ws.onerror = (error) => {
+        addLog('error', `WebSocket error: ${error.message || 'Connection failed'}`);
+      };
+
+      ws.onclose = () => {
+        addLog('warning', 'WebSocket disconnected');
+      };
+
+      return ws;
+    }
+
+    function generateJobId() {
+      return 'test-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+    }
+
+    function sendWebSocketRequest(ws, message, targetLanguages) {
+      if (ws.readyState === WebSocket.OPEN) {
+        const jobId = generateJobId();
+
+        // 각 언어별로 개별 요청 추적
+        targetLanguages.forEach(lang => {
+          const langJobId = `${jobId}-${lang}`;
+          pendingRequests.set(langJobId, {
+            timestamp: Date.now(),
+            message: message,
+            language: lang,
+            baseJobId: jobId
+          });
+        });
+
+        ws.send(JSON.stringify({
+          type: 'translate',
+          jobId: jobId, // 서버가 응답에 포함할 수 있도록 jobId 전달
+          text: message,
+          targetLanguages: targetLanguages,
+          options: {
+            expandAbbreviations: true,
+            filterProfanity: false,
+            normalizeRepeats: true,
+            removeEmoticons: true,
+            fixTypos: false,
+          }
+        }));
+        return true;
+      } else {
+        errorCount++;
+        return false;
+      }
+    }
+
+    async function startTest() {
+      if (chatMessages.length === 0) {
+        addLog('error', 'Please load a CSV file first');
+        alert('Please load a CSV file first!');
+        return;
+      }
+
+      const targetRps = parseInt(document.getElementById('targetRps').value);
+      const duration = parseInt(document.getElementById('duration').value);
+      const connectionType = document.getElementById('connectionType').value;
+      const targetLanguagesStr = document.getElementById('targetLanguages').value;
+      const targetLanguages = targetLanguagesStr.split(',').map(lang => lang.trim());
+
+      testRunning = true;
+      testStartTime = Date.now();
+      requestsSent = 0;
+      successCount = 0;
+      errorCount = 0;
+      timeoutCount = 0;
+      currentMessageIndex = 0;
+      pendingRequests.clear();
+      translationResults = [];
+      document.getElementById('translationResults').innerHTML = '<div class="log-entry info">Waiting for translations...</div>';
+
+      document.getElementById('startBtn').disabled = true;
+      document.getElementById('stopBtn').disabled = false;
+      document.getElementById('statusText').textContent = 'Running';
+      document.getElementById('statusIndicator').className = 'status-indicator running';
+
+      addLog('info', `Starting test: ${targetRps} RPS for ${duration} seconds`);
+      addLog('info', `Connection: ${connectionType.toUpperCase()}`);
+      addLog('info', `Target languages: ${targetLanguages.join(', ')}`);
+      addLog('info', `Message pool: ${chatMessages.length} messages`);
+
+      // WebSocket setup
+      if (connectionType === 'websocket') {
+        // Create multiple WebSocket connections for better throughput
+        const wsCount = Math.min(Math.ceil(targetRps / 50), 50); // Up to 50 connections
+        addLog('info', `Creating ${wsCount} WebSocket connections...`);
+        for (let i = 0; i < wsCount; i++) {
+          wsConnections.push(connectWebSocket());
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for connections
+        addLog('success', `${wsCount} WebSocket connections established`);
+      }
+
+      // High-precision RPS sender using requestAnimationFrame
+      let lastTickTime = Date.now();
+      let expectedRequests = 0;
+
+      const sendBatch = () => {
+        if (!testRunning) return;
+
+        const now = Date.now();
+        const elapsed = (now - testStartTime) / 1000;
+
+        // Check if duration exceeded
+        if (elapsed >= duration) {
+          stopTest();
+          return;
+        }
+
+        // Calculate how many requests should have been sent by now
+        expectedRequests = Math.floor(elapsed * targetRps);
+
+        // Send all pending requests (catch up if behind)
+        const requestsToSend = expectedRequests - requestsSent;
+
+        for (let i = 0; i < requestsToSend; i++) {
+          const message = chatMessages[currentMessageIndex % chatMessages.length];
+          currentMessageIndex++;
+
+          if (connectionType === 'http') {
+            sendHttpRequest(message, targetLanguages);
+          } else {
+            const ws = wsConnections[requestsSent % wsConnections.length];
+            sendWebSocketRequest(ws, message, targetLanguages);
+          }
+
+          requestsSent++;
+        }
+
+        // Update stats every 100ms
+        if (now - lastTickTime > 100) {
+          updateStats();
+          lastTickTime = now;
+        }
+
+        // Continue loop
+        intervalId = requestAnimationFrame(sendBatch);
+      };
+
+      // Start the sending loop
+      intervalId = requestAnimationFrame(sendBatch);
+
+      // Timer for stats update and timeout check
+      timerIntervalId = setInterval(() => {
+        updateStats();
+        checkTimeouts(); // 타임아웃 체크
+      }, 1000); // 1초마다 체크
+    }
+
+    function stopTest() {
+      testRunning = false;
+
+      if (intervalId) {
+        cancelAnimationFrame(intervalId);
+        intervalId = null;
+      }
+
+      if (timerIntervalId) {
+        clearInterval(timerIntervalId);
+        timerIntervalId = null;
+      }
+
+      // Close WebSocket connections
+      wsConnections.forEach(ws => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close();
+        }
+      });
+      wsConnections = [];
+
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = true;
+      document.getElementById('statusText').textContent = 'Stopped';
+      document.getElementById('statusIndicator').className = 'status-indicator idle';
+
+      const elapsed = ((Date.now() - testStartTime) / 1000).toFixed(1);
+      const actualRps = elapsed > 0 ? (requestsSent / elapsed).toFixed(1) : 0;
+
+      // 최종 통계
+      updateStats(); // 마지막 업데이트
+
+      addLog('success', `Test completed in ${elapsed}s`);
+      addLog('info', `Total requests sent: ${requestsSent}`);
+      addLog('info', `✅ Success: ${successCount} | ❌ Errors: ${errorCount} | ⏱️ Timeout: ${timeoutCount} | ⏳ Pending: ${pendingRequests.size}`);
+      addLog('info', `Average RPS: ${actualRps}`);
+
+      const totalResponses = successCount + errorCount + timeoutCount;
+      const successRate = totalResponses > 0 ? ((successCount / totalResponses) * 100).toFixed(1) : 0;
+      addLog('info', `Success rate: ${successRate}% (${successCount}/${totalResponses})`);
+
+      if (pendingRequests.size > 0) {
+        addLog('warning', `${pendingRequests.size} requests still pending (may complete soon or timeout)`);
+      }
+    }
+  </script>
+</body>
+</html>

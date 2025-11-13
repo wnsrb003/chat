@@ -1,11 +1,10 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { queueService } from "../services/queue.service";
-import { spellCheckService } from "../services/spellcheck.service";
 import { cacheGrpcService } from "../services/cache-grpc.service";
-import { xlsxLoggerService } from "../services/xlsx-logger.service";
 import { logger } from "../utils/logger";
 import { randomUUID } from "crypto";
+import { getHttpRps } from "../index";
 
 const router = Router();
 
@@ -173,7 +172,7 @@ router.post("/translate", async (req: Request, res: Response) => {
               text: preprocessingResult.preprocessed_text,
               source_lang: preprocessingResult.detected_language,
               target_langs: [targetLang], // 각 언어별로 개별 요청
-              use_cache: true,
+              use_cache: false,
               cache_strategy: "hybrid",
               translator_name: "vllm",
             });
@@ -223,8 +222,6 @@ router.post("/translate", async (req: Request, res: Response) => {
       // 모든 언어 번역 완료 대기
       await Promise.all(translationPromises);
 
-      const totalDuration = performance.now() - startTime;
-
       // logger.info({ // CPU 최적화
       //   msg: "Translation completed (parallel)",
       //   jobId,
@@ -234,7 +231,6 @@ router.post("/translate", async (req: Request, res: Response) => {
       //   languageCount: validatedData.targetLanguages.length,
       // });
 
-      console.log(allTranslations, "@@@");
       // Step 5: Return result
       return res.json({
         success: true,
@@ -441,50 +437,50 @@ const spellCheckSchema = z.object({
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.post("/spellcheck", async (req: Request, res: Response) => {
-  try {
-    const validatedData = spellCheckSchema.parse(req.body);
+// router.post("/spellcheck", async (req: Request, res: Response) => {
+//   try {
+//     const validatedData = spellCheckSchema.parse(req.body);
 
-    if (!spellCheckService.isReady()) {
-      return res.status(503).json({
-        success: false,
-        error:
-          "Spell checker is initializing. Please try again in a few seconds.",
-      });
-    }
+//     if (!spellCheckService.isReady()) {
+//       return res.status(503).json({
+//         success: false,
+//         error:
+//           "Spell checker is initializing. Please try again in a few seconds.",
+//       });
+//     }
 
-    const startTime = Date.now();
-    const result = spellCheckService.check(validatedData.text);
-    const duration = Date.now() - startTime;
+//     const startTime = Date.now();
+//     const result = spellCheckService.check(validatedData.text);
+//     const duration = Date.now() - startTime;
 
-    logger.info(
-      { text: validatedData.text, hasErrors: result.hasErrors, duration },
-      "Spell check completed successfully"
-    );
+//     logger.info(
+//       { text: validatedData.text, hasErrors: result.hasErrors, duration },
+//       "Spell check completed successfully"
+//     );
 
-    return res.json({
-      success: true,
-      data: result,
-      meta: {
-        duration,
-      },
-    });
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return res.status(400).json({
-        success: false,
-        error: "Validation error",
-        details: error.errors,
-      });
-    }
+//     return res.json({
+//       success: true,
+//       data: result,
+//       meta: {
+//         duration,
+//       },
+//     });
+//   } catch (error) {
+//     if (error instanceof z.ZodError) {
+//       return res.status(400).json({
+//         success: false,
+//         error: "Validation error",
+//         details: error.errors,
+//       });
+//     }
 
-    logger.error({ error }, "Spell check request failed");
-    return res.status(500).json({
-      success: false,
-      error: "Internal server error",
-    });
-  }
-});
+//     logger.error({ error }, "Spell check request failed");
+//     return res.status(500).json({
+//       success: false,
+//       error: "Internal server error",
+//     });
+//   }
+// });
 
 /**
  * @swagger
@@ -524,7 +520,7 @@ router.get("/health", async (_req: Request, res: Response) => {
       success: true,
       status: "healthy",
       queue: stats,
-      spellChecker: spellCheckService.isReady() ? "ready" : "initializing",
+      // spellChecker: spellCheckService.isReady() ? "ready" : "initializing",
       timestamp: Date.now(),
     });
   } catch (error) {
@@ -666,7 +662,16 @@ async function processLanguageIndependently(
 
     // Step 2: 전처리 결과 대기
     const preprocessingResult = await queueService.waitForPreprocessing(jobId);
+
     const gateway_preprocessing_time_ms = performance.now() - startTime;
+    // const preprocessingResult = {
+    //   preprocessed_text: text,
+    //   detected_language: "ko",
+    //   original_text: text,
+    //   preprocessing_time_ms: 0,
+    //   filtered: false,
+    //   filter_reason: "",
+    // };
 
     if (preprocessingResult.filtered) {
       logger.warn({ jobId, targetLang }, "Text filtered in preprocessing");
@@ -720,7 +725,7 @@ async function processLanguageIndependently(
       text: preprocessingResult.preprocessed_text,
       source_lang: preprocessingResult.detected_language,
       target_langs: [targetLang],
-      use_cache: true,
+      use_cache: false,
       cache_strategy: "hybrid",
       translator_name: "vllm",
     });
@@ -845,6 +850,57 @@ router.get("/queue/stats", async (_req: Request, res: Response) => {
     });
   } catch (error) {
     logger.error({ error }, "Failed to get queue stats");
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error",
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/rps/stats:
+ *   get:
+ *     summary: Get real-time RPS statistics
+ *     description: Get real-time requests per second statistics from all services
+ *     tags: [RPS]
+ *     responses:
+ *       200:
+ *         description: RPS statistics retrieved successfully
+ *       500:
+ *         description: Internal server error
+ */
+router.get("/rps/stats", (_req: Request, res: Response) => {
+  try {
+    const queueMetrics = queueService.getRpsMetrics();
+    const wsMetrics = wsService
+      ? wsService.getRpsMetrics()
+      : {
+          connections: 0,
+          translateRequest: 0,
+          translationComplete: 0,
+        };
+    const cacheGrpcMetrics = cacheGrpcService.getRpsMetrics();
+
+    const data = {
+      apiGateway: getHttpRps(),
+      queue: queueMetrics,
+      websocket: wsMetrics,
+      cacheGrpc: cacheGrpcMetrics,
+      worker: {
+        // Python worker metrics will be added via separate endpoint or WebSocket
+        processing: 0,
+        complete: 0,
+      },
+    };
+
+    return res.json({
+      success: true,
+      data,
+      timestamp: Date.now(),
+    });
+  } catch (error) {
+    logger.error({ error }, "Failed to get RPS stats");
     return res.status(500).json({
       success: false,
       error: "Internal server error",

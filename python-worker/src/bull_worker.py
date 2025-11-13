@@ -26,9 +26,16 @@ logger.add(
 # 전처리기 초기화 (번역은 API Gateway에서 처리)
 preprocessor = TextPreprocessor()
 
+# RPS 모니터링 카운터
+job_processing_counter = 0
+preprocessing_complete_counter = 0
+
 
 def process_bull_job(job_id: str, job_data: dict) -> dict:
     """Bull 작업 처리 - 전처리 전용 (번역은 API Gateway에서 처리)"""
+    global job_processing_counter
+    job_processing_counter += 1  # RPS 카운터
+
     start_time = time.time()
 
     try:
@@ -133,6 +140,9 @@ def get_job_data(redis_conn: Redis, queue_name: str, job_id: str):
 
 def complete_job(redis_conn: Redis, queue_name: str, job_id: str, result: dict):
     """전처리 완료 이벤트 발행 (API Gateway가 전처리 결과를 받아서 gRPC 호출)"""
+    global preprocessing_complete_counter
+    preprocessing_complete_counter += 1  # RPS 카운터
+
     logger.debug(f"Publishing preprocessing result for job {job_id}")
 
     # ✨ active 리스트에서 제거 (중요! 안하면 계속 쌓임)
@@ -251,6 +261,17 @@ async def worker_task(worker_id: int, queue_name: str):
         logger.info(f"Worker-{worker_id} Redis connection closed")
 
 
+async def monitor_rps():
+    """RPS 모니터링 태스크"""
+    global job_processing_counter, preprocessing_complete_counter
+
+    while True:
+        await asyncio.sleep(1)
+        logger.info(f"[METRIC] PYTHON_WORKER | job_processing_rps={job_processing_counter} | preprocessing_complete_rps={preprocessing_complete_counter}")
+        job_processing_counter = 0
+        preprocessing_complete_counter = 0
+
+
 async def main():
     """메인 워커 루프 (전처리 전용)"""
     queue_name = settings.queue_name
@@ -270,7 +291,10 @@ async def main():
             for i in range(concurrency)
         ]
 
-        await asyncio.gather(*workers)
+        # RPS 모니터링 태스크 추가
+        tasks = workers + [monitor_rps()]
+
+        await asyncio.gather(*tasks)
 
     except KeyboardInterrupt:
         logger.info("All workers shutting down...")

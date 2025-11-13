@@ -9,6 +9,7 @@ import { filter } from "compression";
 
 const wsMessageSchema = z.object({
   type: z.enum(["translate", "ping"]),
+  jobId: z.string().optional(), // 클라이언트가 제공하는 요청 추적용 ID
   text: z.string().min(1).max(5000).optional(),
   targetLanguages: z.array(z.string()).min(1).max(10).optional(),
   options: z
@@ -26,7 +27,28 @@ export class WebSocketService {
   private wss: WebSocketServer;
   private clients: Map<string, WebSocket> = new Map();
 
+  // RPS 모니터링
+  private wsConnectionCounter = 0;
+  private wsTranslateRequestCounter = 0;
+  private wsTranslationCompleteCounter = 0;
+  private lastWsTranslateRequestRps = 0;
+  private lastWsTranslationCompleteRps = 0;
+
   constructor(server: Server) {
+    // WebSocket RPS 모니터링
+    setInterval(() => {
+      this.lastWsTranslateRequestRps = this.wsTranslateRequestCounter;
+      this.lastWsTranslationCompleteRps = this.wsTranslationCompleteCounter;
+
+      // logger.info({
+      //   metric: "WEBSOCKET_SERVICE",
+      //   connections: this.wsConnectionCounter,
+      //   translate_request_rps: this.wsTranslateRequestCounter,
+      //   translation_complete_rps: this.wsTranslationCompleteCounter,
+      // });
+      this.wsTranslateRequestCounter = 0;
+      this.wsTranslationCompleteCounter = 0;
+    }, 1000);
     this.wss = new WebSocketServer({
       server,
       path: "/ws",
@@ -39,6 +61,7 @@ export class WebSocketService {
     this.wss.on("connection", (ws: WebSocket) => {
       const clientId = randomUUID();
       this.clients.set(clientId, ws);
+      this.wsConnectionCounter++;
 
       logger.info({ clientId }, "WebSocket client connected");
 
@@ -68,6 +91,7 @@ export class WebSocketService {
 
       ws.on("close", () => {
         this.clients.delete(clientId);
+        this.wsConnectionCounter--;
         logger.info({ clientId }, "WebSocket client disconnected");
       });
 
@@ -106,26 +130,30 @@ export class WebSocketService {
           return;
         }
 
+        this.wsTranslateRequestCounter++; // RPS 카운터
+
+        // TypeScript narrowing - 이제 확실히 정의되어 있음
+        const text = validatedMessage.text;
+        const targetLanguages = validatedMessage.targetLanguages;
+        const jobId = validatedMessage.jobId;
+
         logger.info(
           {
-            text: validatedMessage.text.substring(0, 50),
-            languageCount: validatedMessage.targetLanguages.length,
+            text: text.substring(0, 50),
+            languageCount: targetLanguages.length,
             clientId,
           },
           "WebSocket translate request received"
         );
 
         // 각 언어를 완전히 독립적으로 처리 (fire-and-forget)
-        // const text = validatedMessage.text; // TypeScript narrowing
-        // const targetLanguages = validatedMessage.targetLanguages;
-
-        // targetLanguages.forEach((targetLang) => {
-        validatedMessage.targetLanguages.forEach((targetLang) => {
+        targetLanguages.forEach((targetLang) => {
           this.processLanguageIndependentlyForWebSocket(
             ws,
-            validatedMessage.text,
+            text,
             targetLang,
-            validatedMessage.options || {}
+            validatedMessage.options || {},
+            jobId // 클라이언트 제공 jobId 전달
           ).catch((error) => {
             logger.error(
               { error, targetLang, clientId },
@@ -162,9 +190,13 @@ export class WebSocketService {
     ws: WebSocket,
     text: string,
     targetLang: string,
-    options: any
+    options: any,
+    clientJobId?: string // 클라이언트가 제공한 jobId
   ) {
-    const jobId = randomUUID();
+    // 클라이언트 jobId가 있으면 사용, 없으면 서버에서 생성
+    const baseJobId = clientJobId || randomUUID();
+    // 언어별로 고유한 jobId 생성 (클라이언트 추적과 일치)
+    const jobId = `${baseJobId}-${targetLang}`;
     const startTime = performance.now();
 
     try {
@@ -220,12 +252,22 @@ export class WebSocketService {
       }
 
       // Step 4: 번역 (단일 언어)
-      const translationStartTime = performance.now();
+      // const preprocessingResult = {
+      //   preprocessed_text: text,
+      //   detected_language: "ko",
+      //   original_text: text,
+      //   preprocessing_time_ms: 0,
+      //   filtered: false,
+      //   filter_reason: "",
+      // };
+
       const grpcResult = await cacheGrpcService.translate({
         text: preprocessingResult.preprocessed_text,
         source_lang: preprocessingResult.detected_language,
+        // text: text,
+        // source_lang: "ko",
         target_langs: [targetLang],
-        use_cache: true,
+        use_cache: false,
         cache_strategy: "hybrid",
         translator_name: "vllm",
       });
@@ -234,6 +276,8 @@ export class WebSocketService {
 
       // Step 5: 번역 완료 전송
       if (grpcResult.translations[targetLang]) {
+        this.wsTranslationCompleteCounter++; // RPS 카운터
+
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(
             JSON.stringify({
@@ -304,5 +348,14 @@ export class WebSocketService {
     this.clients.forEach((client) => client.close());
     this.wss.close();
     logger.info("WebSocket server closed");
+  }
+
+  // RPS 조회 함수
+  getRpsMetrics() {
+    return {
+      connections: this.wsConnectionCounter,
+      translateRequest: this.lastWsTranslateRequestRps,
+      translationComplete: this.lastWsTranslationCompleteRps,
+    };
   }
 }

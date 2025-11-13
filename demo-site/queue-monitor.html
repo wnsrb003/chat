@@ -310,6 +310,24 @@
         <div class="value" id="stuckCount">-</div>
         <div class="unit">jobs stuck</div>
       </div>
+
+      <div class="stat-card performance" style="border-left-color: #ef4444;">
+        <div class="label">📝 Redis Write</div>
+        <div class="value" id="redisWriteAvg">-</div>
+        <div class="unit">ms (avg)</div>
+      </div>
+
+      <div class="stat-card performance" style="border-left-color: #3b82f6;">
+        <div class="label">📖 Redis Read</div>
+        <div class="value" id="redisReadAvg">-</div>
+        <div class="unit">ms (avg)</div>
+      </div>
+
+      <div class="stat-card performance" style="border-left-color: #8b5cf6;">
+        <div class="label">⚡ Last Query</div>
+        <div class="value" id="redisLastQuery">-</div>
+        <div class="unit">ms</div>
+      </div>
     </div>
 
     <div class="jobs-section">
@@ -393,6 +411,13 @@
       const jobsPerSecond = throughputPerMinute / 60;
       document.getElementById('jobsPerSecond').textContent = jobsPerSecond.toFixed(2);
       document.getElementById('avgTime').textContent = data.performance.avgProcessingTimeMs || 0;
+
+      // Update Redis metrics
+      if (data.redis) {
+        document.getElementById('redisWriteAvg').textContent = data.redis.writeAvgMs || 0;
+        document.getElementById('redisReadAvg').textContent = data.redis.readAvgMs || 0;
+        document.getElementById('redisLastQuery').textContent = data.redis.lastQueryMs || 0;
+      }
 
       // Update stuck job lists
       updateStuckJobList('stuckActiveJobs', 'stuckActiveCount', data.stuck?.stuckActiveJobs || [], 'stuck-active');
@@ -508,6 +533,19 @@
         const failureRate = (data.counts.failed / totalProcessed) * 100;
         if (failureRate > 10) {
           bottlenecks.push(`High failure rate (${failureRate.toFixed(1)}%). Check logs for errors.`);
+        }
+      }
+
+      // Check Redis performance
+      if (data.redis) {
+        if (data.redis.writeAvgMs > 10) {
+          bottlenecks.push(`⚠️ REDIS WRITE SLOW: Average write time is ${data.redis.writeAvgMs}ms (should be < 10ms). Redis might be overloaded or network latency is high.`);
+        }
+        if (data.redis.readAvgMs > 20) {
+          bottlenecks.push(`⚠️ REDIS READ SLOW: Average read time is ${data.redis.readAvgMs}ms (should be < 20ms). Check Redis performance and network.`);
+        }
+        if (data.redis.lastQueryMs > 50) {
+          bottlenecks.push(`⚠️ LAST QUERY SLOW: Last query took ${data.redis.lastQueryMs}ms. Redis might be experiencing high load.`);
         }
       }
 

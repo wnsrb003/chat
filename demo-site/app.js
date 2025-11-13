@@ -21,6 +21,11 @@ const state = {
   messageCache: new Map(), // DOM 요소 캐싱으로 성능 개선
   xlsxData: [], // XLSX 내보내기용 데이터
   preprocessingCache: new Map(), // 전처리 데이터 캐싱 (jobId → preprocessing data)
+  pendingRequests: new Map(), // jobId -> { timestamp, index, lang, text }
+  requestsSent: 0,
+  successCount: 0,
+  errorCount: 0,
+  timeoutCount: 0,
 };
 
 // DOM 요소
@@ -32,7 +37,6 @@ const elements = {
   avgTime: document.getElementById("avgTime"),
   rpsValue: document.getElementById("rpsValue"),
   simulateBtn: document.getElementById("simulateBtn"),
-  startBtn: document.getElementById("startBtn"),
   stopBtn: document.getElementById("stopBtn"),
   clearBtn: document.getElementById("clearBtn"),
   speedSlider: document.getElementById("speedSlider"),
@@ -110,8 +114,8 @@ function cleanupOldChats() {
 
 // WebSocket 연결
 function connectWebSocket() {
+  // const wsUrl = "ws://localhost:3000/ws";
   const wsUrl = "ws://localhost:3000/ws";
-  // const wsUrl = "wss://3000-01k7redychy4yr660skfrd1nqc.cloudspaces.litng.ai/ws";
 
   elements.status.className = "status disconnected";
   elements.status.textContent = "연결 중...";
@@ -169,6 +173,23 @@ function handleWebSocketMessage(message) {
 
     case "partial-translation":
       // 각 언어별 번역 완료 - 즉시 화면에 표시
+      // pending 요청 체크 및 제거
+      if (message.jobId && state.pendingRequests.has(message.jobId)) {
+        const pendingData = state.pendingRequests.get(message.jobId);
+        const duration = Date.now() - pendingData.timestamp;
+        state.successCount++;
+        state.pendingRequests.delete(message.jobId);
+        console.log(
+          `✅ [${message.data.language}] 번역 완료: ${duration}ms (msg: ${pendingData.messageId})`
+        );
+
+        // message_id를 metadata에 추가하여 handlePartialTranslation에서 사용
+        if (!message.data.metadata) {
+          message.data.metadata = {};
+        }
+        message.data.metadata.message_id = pendingData.messageId;
+      }
+
       handlePreprocessingComplete(message.jobId, message.data);
       handlePartialTranslation(message.jobId, message.data);
       break;
@@ -180,11 +201,20 @@ function handleWebSocketMessage(message) {
 
     case "partial-error":
       // 특정 언어 번역 실패
+      if (message.jobId && state.pendingRequests.has(message.jobId)) {
+        state.errorCount++;
+        state.pendingRequests.delete(message.jobId);
+        console.error(`❌ [${message.data?.language}] 번역 실패`);
+      }
       handlePartialError(message.jobId, message.data);
       break;
 
     case "error":
       // 전체 에러
+      if (message.jobId && state.pendingRequests.has(message.jobId)) {
+        state.errorCount++;
+        state.pendingRequests.delete(message.jobId);
+      }
       handleTranslationError(message.jobId, message.error);
       break;
 
@@ -199,6 +229,32 @@ function handleWebSocketMessage(message) {
       break;
   }
 }
+
+// 타임아웃 체크 함수 (30초)
+const REQUEST_TIMEOUT = 30000;
+function checkTimeouts() {
+  const now = Date.now();
+  const timeoutIds = [];
+
+  state.pendingRequests.forEach((data, jobId) => {
+    if (now - data.timestamp > REQUEST_TIMEOUT) {
+      timeoutIds.push(jobId);
+    }
+  });
+
+  if (timeoutIds.length > 0) {
+    timeoutIds.forEach((jobId) => {
+      const data = state.pendingRequests.get(jobId);
+      state.pendingRequests.delete(jobId);
+      state.errorCount++;
+      state.timeoutCount++;
+      console.warn(`⏱️ Timeout: ${jobId} (lang: ${data.lang})`);
+    });
+  }
+}
+
+// 타임아웃 체크 시작 (1초마다)
+setInterval(checkTimeouts, 1000);
 
 // 원본 채팅 즉시 표시 (번역 전)
 function handleOriginalChat(data) {
@@ -461,7 +517,7 @@ function handlePartialTranslation(jobId, data) {
       cache_hits: data.cacheHit || false,
       // cache_processing_ms: data.cache_processing_ms || -1,
       cache_lookup_ms: data.cache_lookup_time_ms || -1,
-      llm_response_time_ms: data.llm_response_time_ms[language] || -1,
+      llm_response_time_ms: data.llm_response_time_ms?.[language] || -1,
       filtered: data.filtered || false,
       filter_reason: data.filter_reason || "",
     };
@@ -529,14 +585,16 @@ function startChatSimulation() {
   if (state.isSimulating) return;
 
   state.isSimulating = true;
+  state.isTranslating = true; // 번역도 자동 시작
   state.currentSimIndex = 0;
   state.displayedChats = [];
   state.allSimulatedChats = []; // 전체 시뮬레이션 목록 초기화
 
   elements.simulateBtn.disabled = true;
-  elements.startBtn.disabled = false;
   elements.stopBtn.disabled = false;
   elements.originalChat.innerHTML = "";
+  elements.status.className = "status processing";
+  elements.status.textContent = "⏳ 채팅 + 번역 중...";
 
   // 첫 채팅 바로 표시
   showNextChat();
@@ -559,15 +617,20 @@ function showNextChat() {
 
   const chat = state.chats[state.currentSimIndex];
   const currentIndex = state.currentSimIndex;
+
+  // message_id 생성 (realtime_broadcaster와 동일한 방식)
+  const messageId = `${Date.now()}_${currentIndex}`;
+
   state.displayedChats.push(chat);
   state.allSimulatedChats.push(chat); // 번역용 전체 목록에 추가
 
   const messageDiv = document.createElement("div");
   messageDiv.className = "chat-message";
   messageDiv.dataset.index = currentIndex;
+  messageDiv.dataset.messageId = messageId; // message_id로 찾을 수 있도록 추가
   messageDiv.innerHTML = `
     <span class="chat-header">
-      <span class="chat-user">${escapeHtml(chat?.username)}:</span>
+      <span class="chat-user">${escapeHtml(chat?.username || "익명")}:</span>
     </span>
     <span class="chat-original">
       <span class="chat-label">원본:</span>
@@ -579,19 +642,19 @@ function showNextChat() {
     </span>
     <span class="chat-translation">
       <span class="chat-label">🇺🇸 EN:</span>
-      <span class="chat-text" data-lang="en">...</span>
+      <span class="chat-text" data-lang="en">⏳</span>
     </span>
     <span class="chat-translation">
       <span class="chat-label">🇹🇭 TH:</span>
-      <span class="chat-text" data-lang="th">...</span>
+      <span class="chat-text" data-lang="th">⏳</span>
     </span>
     <span class="chat-translation">
       <span class="chat-label">🇨🇳 CN:</span>
-      <span class="chat-text" data-lang="zh-CN">...</span>
+      <span class="chat-text" data-lang="zh-CN">⏳</span>
     </span>
     <span class="chat-translation">
       <span class="chat-label">🇹🇼 TW:</span>
-      <span class="chat-text" data-lang="zh-TW">...</span>
+      <span class="chat-text" data-lang="zh-TW">⏳</span>
     </span>
   `;
 
@@ -603,21 +666,21 @@ function showNextChat() {
   // 오래된 채팅 정리 (100개 초과 시)
   cleanupOldChats();
 
-  // 번역 중이면 바로 번역 요청 보내기
+  // 번역 중이면 바로 번역 요청 보내기 (broadcaster처럼 즉시 호출)
   if (state.isTranslating) {
-    translateChat(currentIndex);
+    translateChat(messageId, chat.text);
   }
 }
 
-// 개별 채팅 번역 (4개 언어별로 독립적인 HTTP 요청)
-async function translateChat(index) {
-  // if (!state.isTranslating) return;
+// 개별 채팅 번역 (WebSocket 기반, realtime_broadcaster 방식)
+async function translateChat(messageId, text) {
+  if (!text) return;
 
-  const chat = state.allSimulatedChats[index]; // 전체 시뮬레이션 목록에서 가져오기
-  if (!chat) return;
-
-  const messageDiv = document.querySelector(`[data-index="${index}"]`);
-  // messageDiv가 없어도 번역은 진행 (XLSX 데이터 수집용)
+  // WebSocket 연결 확인
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    console.warn("WebSocket not connected, skipping translation");
+    return;
+  }
 
   const options = {
     expandAbbreviations: elements.expandAbbr.checked,
@@ -629,170 +692,39 @@ async function translateChat(index) {
   };
 
   const languages = ["en", "th", "zh-CN", "zh-TW"];
-  let preprocessedText = "";
 
-  // 번역 시작 전 모든 언어 필드를 "로딩 중" 상태로 표시
+  // 각 언어별로 개별 WebSocket 요청 전송 (broadcaster 방식)
   languages.forEach((lang) => {
-    const translationText = messageDiv.querySelector(
-      `.chat-translation .chat-text[data-lang="${lang}"]`
-    );
-    if (translationText) {
-      translationText.textContent = "⏳";
-      translationText.style.color = "#007bff"; // 파란색 (로딩 중)
-    }
-  });
+    // 각 언어마다 고유한 baseJobId 생성
+    const baseJobId =
+      "chat-" + Date.now() + "-" + Math.random().toString(36).substring(2, 9);
+    const fullJobId = `${baseJobId}-${lang}`; // 서버가 응답할 때 사용할 전체 jobId
 
-  // 4개 언어에 대해 병렬로 개별 HTTP 요청 보내기
-  const requests = languages.map((lang) => {
-    const langStartTime = performance.now();
+    // pending 요청 등록 (전체 jobId로 등록)
+    state.pendingRequests.set(fullJobId, {
+      timestamp: Date.now(),
+      messageId: messageId, // message_id 저장
+      lang: lang,
+      text: text,
+      baseJobId: baseJobId,
+    });
+    state.requestsSent++;
 
-    return fetch("http://localhost:3000/api/v1/translate", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        text: chat.text,
-        targetLanguages: [lang], // 각 언어별로 개별 요청
+    // 각 언어마다 개별 WebSocket 메시지 전송
+    state.ws.send(
+      JSON.stringify({
+        type: "translate",
+        jobId: baseJobId, // 서버가 언어별 jobId를 생성할 수 있도록 baseJobId 전달
+        text: text,
+        targetLanguages: [lang], // 하나의 언어만 전송
         options: options,
-      }),
-    })
-      .then((res) => res.json())
-      .then((result) => {
-        const langDuration = performance.now() - langStartTime;
-        console.log(
-          `[${lang}] 번역 완료: ${langDuration.toFixed(1)}ms`,
-          result
-        );
-
-        if (result.success && result.data) {
-          const { translation, preprocessedText } = result.data[lang];
-          console.log(`[${lang}] 번역 데이터:`, translation);
-
-          // 전처리 텍스트 저장 및 즉시 업데이트 (첫 번째 응답만)
-          if (!preprocessedText) {
-            preprocessedText = preprocessedText || "";
-
-            // DOM이 있을 때만 업데이트
-            if (messageDiv) {
-              const preprocessedTextEl = messageDiv.querySelector(
-                ".chat-preprocessed .chat-text"
-              );
-              if (preprocessedTextEl) {
-                preprocessedTextEl.textContent = preprocessedText;
-                console.log(
-                  `[${lang}] 전처리 텍스트 업데이트:`,
-                  preprocessedText
-                );
-              } else {
-                console.warn(`[${lang}] 전처리 텍스트 요소를 찾을 수 없음`);
-              }
-            }
-          }
-
-          // 번역 결과가 들어오는 즉시 해당 언어 필드 업데이트
-          if (translation) {
-            // DOM이 있을 때만 업데이트
-            if (messageDiv) {
-              const translationText = messageDiv.querySelector(
-                `.chat-translation .chat-text[data-lang="${lang}"]`
-              );
-
-              console.log(`[${lang}] 번역 요소 찾기:`, translationText);
-              console.log(`[${lang}] 번역 텍스트:`, translation);
-
-              if (translationText) {
-                translationText.textContent = translation;
-                console.log(`[${lang}] ✅ 번역 표시 완료:`, translation);
-
-                // 완료 시 초록색으로 강조 (200ms)
-                translationText.style.color = "#28a745";
-                translationText.style.fontWeight = "bold";
-
-                setTimeout(() => {
-                  translationText.style.color = "";
-                  translationText.style.fontWeight = "";
-                }, 200);
-              } else {
-                console.error(`[${lang}] ⚠️ 번역 요소를 찾을 수 없음!`);
-                console.log("messageDiv:", messageDiv);
-                console.log(
-                  "모든 .chat-translation 요소:",
-                  messageDiv.querySelectorAll(".chat-translation")
-                );
-              }
-            }
-          } else {
-            console.warn(`[${lang}] ⚠️ 번역 결과가 없음:`, translation);
-          }
-
-          // 통계 업데이트 (각 언어별로)
-          state.translatedCount++;
-          const processingTime = result.data[lang].total_ms;
-          state.totalTime += processingTime;
-
-          elements.translatedCount.textContent = state.translatedCount;
-          elements.avgTime.textContent =
-            Math.round(state.totalTime / state.translatedCount) + "ms";
-
-          // RPS 기록
-          recordCompletion();
-
-          // XLSX 로깅용 데이터 추가 (data에 모든 정보 포함됨)
-          if (translation) {
-            const {
-              originalText,
-              detectedLanguage,
-              preprocessedText,
-              cache_hit,
-              preprocessing_ms,
-              cache_processing_ms,
-              cache_lookup_time_ms,
-              llm_response_time_ms,
-              filtered,
-              filter_reason,
-            } = result.data[lang];
-            const xlsxRow = {
-              timestamp: new Date().toISOString(),
-              original_text: originalText,
-              preprocessed_text: preprocessedText,
-              detected_language: detectedLanguage,
-              translation_lang: lang,
-              translation_text: translation,
-              total_time_ms: processingTime || -1,
-              preprocessing_time_ms: preprocessing_ms || -1,
-              total_cache_server_time_ms: cache_processing_ms || -1,
-              cache_hits: cache_hit || false,
-              llm_response_time_ms: llm_response_time_ms[lang] || -1,
-              cache_lookup_ms: cache_lookup_time_ms || -1,
-              filtered: filtered || false,
-              filter_reason: filter_reason || "",
-            };
-            state.xlsxData.push(xlsxRow);
-          } else {
-            console.warn("⚠️ Missing http response data:", result.data);
-          }
-          return result;
-        }
-        return null;
       })
-      .catch((error) => {
-        console.error(`Translation error for ${lang}:`, error);
+    );
 
-        // 오류 표시
-        const translationText = messageDiv.querySelector(
-          `.chat-translation .chat-text[data-lang="${lang}"]`
-        );
-        if (translationText) {
-          translationText.textContent = "⚠️";
-          translationText.style.color = "#dc3545";
-        }
-        return null;
-      });
+    console.log(
+      `📤 Translation request sent: ${fullJobId} (msg: ${messageId})`
+    );
   });
-
-  // 모든 요청 완료 대기 (이미 UI는 각각 업데이트됨)
-  await Promise.all(requests);
 }
 
 // 언어 선택 버튼 (단일 선택)
@@ -845,37 +777,6 @@ elements.simulateBtn.addEventListener("click", () => {
   startChatSimulation();
 });
 
-// 번역 시작 버튼
-elements.startBtn.addEventListener("click", () => {
-  if (state.allSimulatedChats.length === 0) {
-    alert("채팅 시작 버튼을 먼저 눌러주세요.");
-    return;
-  }
-
-  if (!state.selectedLang) {
-    alert("번역할 언어를 선택하세요.");
-    return;
-  }
-
-  if (!state.chats.length) {
-    alert("채팅 데이터셋을 선택해줘.");
-    return;
-  }
-
-  state.isTranslating = true;
-  state.translationQueue = [];
-
-  elements.startBtn.disabled = true;
-  elements.stopBtn.disabled = false;
-  elements.status.className = "status processing";
-  elements.status.textContent = "⏳ 번역 중...";
-
-  // 시뮬레이션된 모든 채팅에 대해 번역 시작 (화면에 표시되지 않은 것도 포함)
-  for (let i = 0; i < state.allSimulatedChats.length; i++) {
-    translateChat(i);
-  }
-});
-
 // 정지 버튼
 elements.stopBtn.addEventListener("click", () => {
   state.isTranslating = false;
@@ -886,7 +787,7 @@ elements.stopBtn.addEventListener("click", () => {
     state.simulateInterval = null;
   }
 
-  elements.startBtn.disabled = false;
+  elements.simulateBtn.disabled = false;
   elements.stopBtn.disabled = true;
   elements.status.className = "status connected";
   elements.status.textContent = "⏸ 정지됨";
@@ -894,6 +795,26 @@ elements.stopBtn.addEventListener("click", () => {
 
 // 초기화 버튼
 elements.clearBtn.addEventListener("click", () => {
+  // 통계 출력 (초기화 전)
+  if (state.requestsSent > 0) {
+    console.log("===== Translation Statistics =====");
+    console.log(`📤 Total Requests Sent: ${state.requestsSent}`);
+    console.log(`✅ Success: ${state.successCount}`);
+    console.log(`❌ Errors: ${state.errorCount}`);
+    console.log(`⏱️ Timeouts: ${state.timeoutCount}`);
+    console.log(`⏳ Pending: ${state.pendingRequests.size}`);
+    const totalResponses =
+      state.successCount + state.errorCount + state.timeoutCount;
+    const successRate =
+      totalResponses > 0
+        ? ((state.successCount / totalResponses) * 100).toFixed(1)
+        : 0;
+    console.log(
+      `📊 Success Rate: ${successRate}% (${state.successCount}/${totalResponses})`
+    );
+    console.log("==================================");
+  }
+
   state.isSimulating = false;
   state.isTranslating = false;
   state.currentSimIndex = 0;
@@ -909,18 +830,24 @@ elements.clearBtn.addEventListener("click", () => {
   state.xlsxData = []; // XLSX 데이터 초기화
   state.preprocessingCache.clear(); // 전처리 캐시 초기화
 
+  // 새로운 통계 카운터 초기화
+  state.pendingRequests.clear();
+  state.requestsSent = 0;
+  state.successCount = 0;
+  state.errorCount = 0;
+  state.timeoutCount = 0;
+
   if (state.simulateInterval) {
     clearInterval(state.simulateInterval);
     state.simulateInterval = null;
   }
 
   elements.originalChat.innerHTML =
-    '<div class="empty-message">채팅 시작 버튼을 눌러주세요</div>';
+    '<div class="empty-message">시작 버튼을 눌러주세요</div>';
   elements.translatedCount.textContent = "0";
   elements.avgTime.textContent = "0ms";
   elements.rpsValue.textContent = "0.0";
   elements.simulateBtn.disabled = false;
-  elements.startBtn.disabled = true;
   elements.stopBtn.disabled = true;
   elements.status.className = "status connected";
   elements.status.textContent = "✓ 초기화됨";
@@ -1022,6 +949,8 @@ async function sendManualChat() {
   };
 
   const currentIndex = state.allSimulatedChats.length; // 전체 목록 기준 인덱스
+  const messageId = `${Date.now()}_${currentIndex}`; // message_id 생성
+
   state.displayedChats.push(chat);
   state.allSimulatedChats.push(chat); // 번역용 전체 목록에도 추가
 
@@ -1029,6 +958,7 @@ async function sendManualChat() {
   const messageDiv = document.createElement("div");
   messageDiv.className = "chat-message";
   messageDiv.dataset.index = currentIndex;
+  messageDiv.dataset.messageId = messageId; // message_id로 찾을 수 있도록 추가
   messageDiv.innerHTML = `
     <span class="chat-header">
       <span class="chat-user">${escapeHtml(chat.username)}:</span>
@@ -1043,19 +973,19 @@ async function sendManualChat() {
     </span>
     <span class="chat-translation">
       <span class="chat-label">🇺🇸 EN:</span>
-      <span class="chat-text" data-lang="en">...</span>
+      <span class="chat-text" data-lang="en">⏳</span>
     </span>
     <span class="chat-translation">
       <span class="chat-label">🇹🇭 TH:</span>
-      <span class="chat-text" data-lang="th">...</span>
+      <span class="chat-text" data-lang="th">⏳</span>
     </span>
     <span class="chat-translation">
       <span class="chat-label">🇨🇳 CN:</span>
-      <span class="chat-text" data-lang="zh-CN">...</span>
+      <span class="chat-text" data-lang="zh-CN">⏳</span>
     </span>
     <span class="chat-translation">
       <span class="chat-label">🇹🇼 TW:</span>
-      <span class="chat-text" data-lang="zh-TW">...</span>
+      <span class="chat-text" data-lang="zh-TW">⏳</span>
     </span>
   `;
 
@@ -1071,14 +1001,8 @@ async function sendManualChat() {
   // 오래된 채팅 정리 (100개 초과 시)
   cleanupOldChats();
 
-  // 번역 시작 버튼 활성화
-  elements.startBtn.disabled = false;
-
-  console.log(state.isTranslating, "@@");
-  // 번역이 이미 시작된 경우 바로 번역
-  // if (state.isTranslating) {
-  await translateChat(currentIndex);
-  // }
+  // 즉시 번역 (realtime_broadcaster 방식)
+  await translateChat(messageId, chat.text);
 }
 
 // 채팅 전송 버튼
