@@ -97,8 +97,8 @@ def process_bull_job(job_id: str, job_data: dict) -> dict:
         raise
 
 
-def get_waiting_jobs(redis_conn: Redis, queue_name: str):
-    """Bull 큐에서 대기 중인 작업 가져오기 (최적화됨)"""
+async def get_waiting_jobs(redis_conn: Redis, queue_name: str):
+    """Bull 큐에서 대기 중인 작업 가져오기 (async 최적화)"""
     # Bull은 bull:{queue_name}:wait 리스트에 작업 ID 저장
     wait_key = f"bull:{queue_name}:wait"
     active_key = f"bull:{queue_name}:active"
@@ -106,8 +106,10 @@ def get_waiting_jobs(redis_conn: Redis, queue_name: str):
     logger.debug(f"Polling queue: {wait_key}")
 
     while True:
-        # BRPOPLPUSH로 작업 가져오기 (블로킹, 타임아웃 0.1초로 단축)
-        job_id = redis_conn.brpoplpush(wait_key, active_key, timeout=0.1)
+        # BRPOPLPUSH를 별도 스레드에서 실행 (asyncio 이벤트 루프 블록 방지)
+        job_id = await asyncio.to_thread(
+            redis_conn.brpoplpush, wait_key, active_key, 0.1
+        )
 
         if job_id:
             decoded_id = job_id.decode('utf-8')
@@ -232,7 +234,7 @@ async def worker_task(worker_id: int, queue_name: str):
     logger.info(f"Worker-{worker_id} started (preprocessing only)")
 
     try:
-        for job_id in get_waiting_jobs(redis_conn, queue_name):
+        async for job_id in get_waiting_jobs(redis_conn, queue_name):
             try:
                 # 작업 데이터 가져오기
                 job_data = get_job_data(redis_conn, queue_name, job_id)
@@ -276,7 +278,7 @@ async def monitor_rps():
 
     while True:
         await asyncio.sleep(1)
-        logger.info(f"[METRIC] PYTHON_WORKER | job_processing_rps={job_processing_counter} | preprocessing_complete_rps={preprocessing_complete_counter}")
+        # logger.info(f"[METRIC] PYTHON_WORKER | job_processing_rps={job_processing_counter} | preprocessing_complete_rps={preprocessing_complete_counter}")
         job_processing_counter = 0
         preprocessing_complete_counter = 0
 

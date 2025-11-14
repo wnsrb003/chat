@@ -10,7 +10,7 @@ class Settings(BaseSettings):
 
     # Queue
     queue_name: str = "translation-jobs"
-    worker_concurrency: int = 50
+    worker_concurrency: int = 100
 
     # VLLM
     vllm_url: str = "http://192.168.190.143:8000/v1/chat/completions"

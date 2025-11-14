@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { queueService } from "../services/queue.service";
-import { cacheGrpcService } from "../services/cache-grpc.service";
+import { cacheService } from "../services/cache.service";
 import { logger } from "../utils/logger";
 import { randomUUID } from "crypto";
 import { getHttpRps } from "../index";
@@ -168,7 +168,7 @@ router.post("/translate", async (req: Request, res: Response) => {
       const translationPromises = validatedData.targetLanguages.map(
         async (targetLang) => {
           try {
-            const grpcResult = await cacheGrpcService.translate({
+            const grpcResult = await cacheService.translate({
               text: preprocessingResult.preprocessed_text,
               source_lang: preprocessingResult.detected_language,
               target_langs: [targetLang], // 각 언어별로 개별 요청
@@ -674,7 +674,7 @@ async function processLanguageIndependently(
     // };
 
     if (preprocessingResult.filtered) {
-      logger.warn({ jobId, targetLang }, "Text filtered in preprocessing");
+      // logger.warn({ jobId, targetLang }, "Text filtered in preprocessing");
       // 필터링 메시지 브로드캐스트 (CPU 최적화: 주석 처리 가능)
       if (wsService) {
         wsService.broadcast({
@@ -721,7 +721,7 @@ async function processLanguageIndependently(
     // }
 
     // Step 4: 번역 (단일 언어)
-    const grpcResult = await cacheGrpcService.translate({
+    const grpcResult = await cacheService.translate({
       text: preprocessingResult.preprocessed_text,
       source_lang: preprocessingResult.detected_language,
       target_langs: [targetLang],
@@ -880,7 +880,7 @@ router.get("/rps/stats", (_req: Request, res: Response) => {
           translateRequest: 0,
           translationComplete: 0,
         };
-    const cacheGrpcMetrics = cacheGrpcService.getRpsMetrics();
+    const cacheGrpcMetrics = cacheService.getRpsMetrics();
 
     const data = {
       apiGateway: getHttpRps(),

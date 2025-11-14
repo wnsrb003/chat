@@ -2,7 +2,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { Server } from "http";
 import { z } from "zod";
 import { queueService } from "./queue.service";
-import { cacheGrpcService } from "./cache-grpc.service";
+import { cacheService } from "./cache.service";
 import { logger } from "../utils/logger";
 import { randomUUID } from "crypto";
 import { filter } from "compression";
@@ -137,14 +137,14 @@ export class WebSocketService {
         const targetLanguages = validatedMessage.targetLanguages;
         const jobId = validatedMessage.jobId;
 
-        logger.info(
-          {
-            text: text.substring(0, 50),
-            languageCount: targetLanguages.length,
-            clientId,
-          },
-          "WebSocket translate request received"
-        );
+        // logger.info(
+        //   {
+        //     text: text.substring(0, 50),
+        //     languageCount: targetLanguages.length,
+        //     clientId,
+        //   },
+        //   "WebSocket translate request received"
+        // );
 
         // 각 언어를 완전히 독립적으로 처리 (fire-and-forget)
         targetLanguages.forEach((targetLang) => {
@@ -217,7 +217,7 @@ export class WebSocketService {
       );
 
       if (preprocessingResult.filtered) {
-        logger.warn({ jobId, targetLang }, "Text filtered in preprocessing");
+        // logger.warn({ jobId, targetLang }, "Text filtered in preprocessing");
         if (ws.readyState === WebSocket.OPEN) {
           // ws.send(
           //   JSON.stringify({
@@ -261,7 +261,7 @@ export class WebSocketService {
       //   filter_reason: "",
       // };
 
-      const grpcResult = await cacheGrpcService.translate({
+      const grpcResult = await cacheService.translate({
         text: preprocessingResult.preprocessed_text,
         source_lang: preprocessingResult.detected_language,
         // text: text,
@@ -304,14 +304,14 @@ export class WebSocketService {
           );
         }
 
-        logger.info(
-          {
-            jobId,
-            targetLang,
-            duration: totalDuration,
-          },
-          "Independent WebSocket translation completed"
-        );
+        // logger.info(
+        //   {
+        //     jobId,
+        //     targetLang,
+        //     duration: totalDuration,
+        //   },
+        //   "Independent WebSocket translation completed"
+        // );
       }
     } catch (error) {
       logger.error(

@@ -161,62 +161,62 @@ class CacheGrpcService {
   /**
    * 배치 번역 요청
    */
-  async batchTranslate(requests: TranslateParams[]): Promise<{
-    responses: TranslationResult[];
-    total_processing_time_ms: number;
-    success_count: number;
-    error_count: number;
-  }> {
-    const startTime = Date.now();
+  // async batchTranslate(requests: TranslateParams[]): Promise<{
+  //   responses: TranslationResult[];
+  //   total_processing_time_ms: number;
+  //   success_count: number;
+  //   error_count: number;
+  // }> {
+  //   const startTime = Date.now();
 
-    const batchRequest = {
-      requests: requests.map((req) => ({
-        text: req.text,
-        source_lang: req.source_lang,
-        target_langs: req.target_langs,
-        use_cache: req.use_cache ?? true,
-        cache_strategy: req.cache_strategy || "hybrid",
-        translator_name: req.translator_name || "vllm",
-      })),
-    };
+  //   const batchRequest = {
+  //     requests: requests.map((req) => ({
+  //       text: req.text,
+  //       source_lang: req.source_lang,
+  //       target_langs: req.target_langs,
+  //       use_cache: req.use_cache ?? true,
+  //       cache_strategy: req.cache_strategy || "hybrid",
+  //       translator_name: req.translator_name || "vllm",
+  //     })),
+  //   };
 
-    return new Promise((resolve, reject) => {
-      const deadline = new Date(Date.now() + this.timeout);
+  //   return new Promise((resolve, reject) => {
+  //     const deadline = new Date(Date.now() + this.timeout);
 
-      this.client.BatchTranslate(
-        batchRequest,
-        { deadline },
-        (error: grpc.ServiceError | null, response: any) => {
-          const duration = Date.now() - startTime;
+  //     this.client.BatchTranslate(
+  //       batchRequest,
+  //       { deadline },
+  //       (error: grpc.ServiceError | null, response: any) => {
+  //         const duration = Date.now() - startTime;
 
-          if (error) {
-            logger.error({
-              msg: "gRPC BatchTranslate error",
-              error: error.message,
-              code: error.code,
-              duration,
-            });
-            reject(error);
-            return;
-          }
+  //         if (error) {
+  //           logger.error({
+  //             msg: "gRPC BatchTranslate error",
+  //             error: error.message,
+  //             code: error.code,
+  //             duration,
+  //           });
+  //           reject(error);
+  //           return;
+  //         }
 
-          logger.debug({
-            msg: "gRPC BatchTranslate response",
-            successCount: response.success_count,
-            errorCount: response.error_count,
-            duration,
-          });
+  //         logger.debug({
+  //           msg: "gRPC BatchTranslate response",
+  //           successCount: response.success_count,
+  //           errorCount: response.error_count,
+  //           duration,
+  //         });
 
-          resolve({
-            responses: response.responses,
-            total_processing_time_ms: response.total_processing_time_ms,
-            success_count: response.success_count,
-            error_count: response.error_count,
-          });
-        }
-      );
-    });
-  }
+  //         resolve({
+  //           responses: response.responses,
+  //           total_processing_time_ms: response.total_processing_time_ms,
+  //           success_count: response.success_count,
+  //           error_count: response.error_count,
+  //         });
+  //       }
+  //     );
+  //   });
+  // }
 
   /**
    * Health Check

@@ -15,7 +15,7 @@ const state = {
   translationQueue: [],
   chatSpeed: 500,
   simulateInterval: null,
-  maxDisplayedChats: 500, // 최대 표시 채팅 개수
+  maxDisplayedChats: 50, // 최대 표시 채팅 개수
   completionTimestamps: [], // RPS 계산용 타임스탬프 배열
   currentRPS: 0,
   messageCache: new Map(), // DOM 요소 캐싱으로 성능 개선
@@ -179,9 +179,9 @@ function handleWebSocketMessage(message) {
         const duration = Date.now() - pendingData.timestamp;
         state.successCount++;
         state.pendingRequests.delete(message.jobId);
-        console.log(
-          `✅ [${message.data.language}] 번역 완료: ${duration}ms (msg: ${pendingData.messageId})`
-        );
+        // console.log(
+        //   `✅ [${message.data.language}] 번역 완료: ${duration}ms (msg: ${pendingData.messageId})`
+        // );
 
         // message_id를 metadata에 추가하여 handlePartialTranslation에서 사용
         if (!message.data.metadata) {
@@ -529,8 +529,7 @@ function handlePartialTranslation(jobId, data) {
 
 // WebSocket 스트리밍: 모든 언어 번역 완료
 function handleTranslationComplete(jobId, data) {
-  console.log(`[${jobId}] All translations complete:`, data);
-
+  // console.log(`[${jobId}] All translations complete:`, data);
   // 최종 완료 처리는 이미 partial-translation에서 각각 완료됨
   // 필요시 추가 처리 (예: 완료 애니메이션)
 }
@@ -721,9 +720,9 @@ async function translateChat(messageId, text) {
       })
     );
 
-    console.log(
-      `📤 Translation request sent: ${fullJobId} (msg: ${messageId})`
-    );
+    // console.log(
+    //   `📤 Translation request sent: ${fullJobId} (msg: ${messageId})`
+    // );
   });
 }
 
@@ -796,24 +795,24 @@ elements.stopBtn.addEventListener("click", () => {
 // 초기화 버튼
 elements.clearBtn.addEventListener("click", () => {
   // 통계 출력 (초기화 전)
-  if (state.requestsSent > 0) {
-    console.log("===== Translation Statistics =====");
-    console.log(`📤 Total Requests Sent: ${state.requestsSent}`);
-    console.log(`✅ Success: ${state.successCount}`);
-    console.log(`❌ Errors: ${state.errorCount}`);
-    console.log(`⏱️ Timeouts: ${state.timeoutCount}`);
-    console.log(`⏳ Pending: ${state.pendingRequests.size}`);
-    const totalResponses =
-      state.successCount + state.errorCount + state.timeoutCount;
-    const successRate =
-      totalResponses > 0
-        ? ((state.successCount / totalResponses) * 100).toFixed(1)
-        : 0;
-    console.log(
-      `📊 Success Rate: ${successRate}% (${state.successCount}/${totalResponses})`
-    );
-    console.log("==================================");
-  }
+  // if (state.requestsSent > 0) {
+  // console.log("===== Translation Statistics =====");
+  // console.log(`📤 Total Requests Sent: ${state.requestsSent}`);
+  // console.log(`✅ Success: ${state.successCount}`);
+  // console.log(`❌ Errors: ${state.errorCount}`);
+  // console.log(`⏱️ Timeouts: ${state.timeoutCount}`);
+  // console.log(`⏳ Pending: ${state.pendingRequests.size}`);
+  // const totalResponses =
+  //   state.successCount + state.errorCount + state.timeoutCount;
+  // const successRate =
+  //   totalResponses > 0
+  //     ? ((state.successCount / totalResponses) * 100).toFixed(1)
+  //     : 0;
+  // console.log(
+  //   `📊 Success Rate: ${successRate}% (${state.successCount}/${totalResponses})`
+  // );
+  // console.log("==================================");
+  // }
 
   state.isSimulating = false;
   state.isTranslating = false;

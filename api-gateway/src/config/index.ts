@@ -33,7 +33,9 @@ export const config = {
   },
 
   cacheService: {
+    protocol: (process.env.CACHE_SERVICE_PROTOCOL || "grpc") as "grpc" | "http",
     grpcUrl: process.env.CACHE_SERVICE_GRPC_URL || "192.168.190.158:50051",
+    httpUrl: process.env.CACHE_SERVICE_HTTP_URL || "http://192.168.190.158:8000",
     timeout: parseInt(process.env.CACHE_SERVICE_TIMEOUT || "30000", 10),
   },
-} as const;
+};
