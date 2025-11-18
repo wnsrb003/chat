@@ -36,6 +36,7 @@ export interface PreprocessingResult {
   preprocessing_time_ms: number;
   filtered: boolean;
   filter_reason?: string;
+  emoticons?: string[];
 }
 
 class QueueService {
@@ -67,12 +68,14 @@ class QueueService {
       this.lastPreprocessingCompleteRps = this.preprocessingCompleteCounter;
 
       // Redis 성능 평균 계산
-      this.lastRedisWriteAvg = this.redisWriteCount > 0
-        ? this.redisWriteTimeSum / this.redisWriteCount
-        : 0;
-      this.lastRedisReadAvg = this.redisReadCount > 0
-        ? this.redisReadTimeSum / this.redisReadCount
-        : 0;
+      this.lastRedisWriteAvg =
+        this.redisWriteCount > 0
+          ? this.redisWriteTimeSum / this.redisWriteCount
+          : 0;
+      this.lastRedisReadAvg =
+        this.redisReadCount > 0
+          ? this.redisReadTimeSum / this.redisReadCount
+          : 0;
 
       // logger.info({
       //   metric: "QUEUE_SERVICE",
@@ -404,7 +407,7 @@ class QueueService {
         totalStuck: stuckActiveJobs.length + stuckWaitingJobs.length,
         stuckActiveJobs: stuckActiveJobs.map((job) => ({
           id: job.id,
-          text: job.data?.text?.substring(0, 50) || 'N/A',
+          text: job.data?.text?.substring(0, 50) || "N/A",
           targetLanguages: job.data?.targetLanguages || [],
           startedAt: job.processedOn,
           elapsedMs: job.processedOn ? now - job.processedOn : 0,
@@ -414,7 +417,7 @@ class QueueService {
         })),
         stuckWaitingJobs: stuckWaitingJobs.map((job) => ({
           id: job.id,
-          text: job.data?.text?.substring(0, 50) || 'N/A',
+          text: job.data?.text?.substring(0, 50) || "N/A",
           targetLanguages: job.data?.targetLanguages || [],
           createdAt: job.timestamp,
           waitingMs: now - job.timestamp,
@@ -423,20 +426,20 @@ class QueueService {
       },
       activeJobs: activeJobs.slice(0, 10).map((job) => ({
         id: job.id,
-        text: job.data?.text?.substring(0, 50) || 'N/A',
+        text: job.data?.text?.substring(0, 50) || "N/A",
         targetLanguages: job.data?.targetLanguages || [],
         startedAt: job.processedOn,
         elapsedMs: job.processedOn ? now - job.processedOn : 0,
       })),
       waitingJobs: waitingJobs.slice(0, 10).map((job) => ({
         id: job.id,
-        text: job.data?.text?.substring(0, 50) || 'N/A',
+        text: job.data?.text?.substring(0, 50) || "N/A",
         targetLanguages: job.data?.targetLanguages || [],
         waitingMs: now - job.timestamp,
       })),
       recentCompleted: completedJobs.slice(0, 5).map((job) => ({
         id: job.id,
-        text: job.data?.text?.substring(0, 50) || 'N/A',
+        text: job.data?.text?.substring(0, 50) || "N/A",
         processingTimeMs:
           job.finishedOn && job.processedOn
             ? job.finishedOn - job.processedOn
@@ -444,7 +447,7 @@ class QueueService {
       })),
       recentFailed: failedJobs.slice(0, 5).map((job) => ({
         id: job.id,
-        text: job.data?.text?.substring(0, 50) || 'N/A',
+        text: job.data?.text?.substring(0, 50) || "N/A",
         error: job.failedReason,
       })),
     };

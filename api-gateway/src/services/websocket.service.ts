@@ -5,7 +5,6 @@ import { queueService } from "./queue.service";
 import { cacheService } from "./cache.service";
 import { logger } from "../utils/logger";
 import { randomUUID } from "crypto";
-import { filter } from "compression";
 
 const wsMessageSchema = z.object({
   type: z.enum(["translate", "ping"]),
@@ -217,39 +216,67 @@ export class WebSocketService {
       );
 
       if (preprocessingResult.filtered) {
-        // logger.warn({ jobId, targetLang }, "Text filtered in preprocessing");
+        const exceptionDuration = performance.now() - startTime;
+        logger.warn({ jobId, targetLang }, "Text filtered in preprocessing");
+        let translation = preprocessingResult.original_text;
+
+        // 이모티콘만 있는 경우 original_text가 이미 이모티콘 포함이므로 복원 건너뛰기
+        if (
+          preprocessingResult.emoticons?.length &&
+          preprocessingResult.filter_reason !== "Only emoticons"
+        ) {
+          preprocessingResult.emoticons.forEach(([position, emoticon]) => {
+            if (position === "start") {
+              translation = emoticon + translation;
+            } else {
+              translation += emoticon;
+            }
+          });
+        }
         if (ws.readyState === WebSocket.OPEN) {
-          // ws.send(
-          //   JSON.stringify({
-          //     type: "partial-error",
-          //     jobId,
-          //     data: {
-          //       language: targetLang,
-          //       error: "Text filtered",
-          //       reason: preprocessingResult.filter_reason,
-          //     },
-          //   })
-          // );
+          ws.send(
+            JSON.stringify({
+              type: "partial-translation",
+              jobId,
+              data: {
+                language: targetLang,
+                translation,
+                cacheHit: false,
+                // translation_ms: translationDuration,
+                // XLSX 로깅용 추가 정보
+                originalText: preprocessingResult.original_text,
+                preprocessedText: preprocessingResult.preprocessed_text,
+                detectedLanguage: preprocessingResult.detected_language,
+                total_ms: exceptionDuration,
+                preprocessing_ms: preprocessingResult.preprocessing_time_ms,
+                cache_processing_ms: -1,
+                cache_look_up_ms: -1,
+                llm_response_ms: -1,
+                filtered: preprocessingResult.filtered,
+                filter_reason: preprocessingResult.filter_reason,
+              },
+            })
+          );
         }
         return;
       }
 
       // Step 3: 전처리 완료 전송
-      if (ws.readyState === WebSocket.OPEN) {
-        // ws.send(
-        //   JSON.stringify({
-        //     type: "preprocessing-complete",
-        //     jobId,
-        //     data: {
-        //       language: targetLang,
-        //       originalText: preprocessingResult.original_text,
-        //       preprocessedText: preprocessingResult.preprocessed_text,
-        //       detectedLanguage: preprocessingResult.detected_language,
-        //       preprocessing_ms: preprocessingResult.preprocessing_time_ms,
-        //     },
-        //   })
-        // );
-      }
+      // if (ws.readyState === WebSocket.OPEN) {
+      // ws.send(
+      //   JSON.stringify({
+      //     type: "preprocessing-complete",
+      //     jobId,
+      //     data: {
+      //       language: targetLang,
+      //       originalText: preprocessingResult.original_text,
+      //       preprocessedText: preprocessingResult.preprocessed_text,
+      //       detectedLanguage: preprocessingResult.detected_language,
+      //       preprocessing_ms: preprocessingResult.preprocessing_time_ms,
+      //     },
+      //   })
+      // );
+      // }
 
       // Step 4: 번역 (단일 언어)
       // const preprocessingResult = {
@@ -278,6 +305,18 @@ export class WebSocketService {
       if (grpcResult.translations[targetLang]) {
         this.wsTranslationCompleteCounter++; // RPS 카운터
 
+        // 이모티콘 복원
+        let finalTranslation = grpcResult.translations[targetLang];
+        if (preprocessingResult.emoticons?.length) {
+          preprocessingResult.emoticons.forEach(([position, emoticon]) => {
+            if (position === "start") {
+              finalTranslation = emoticon + finalTranslation;
+            } else {
+              finalTranslation += emoticon;
+            }
+          });
+        }
+
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(
             JSON.stringify({
@@ -285,7 +324,7 @@ export class WebSocketService {
               jobId,
               data: {
                 language: targetLang,
-                translation: grpcResult.translations[targetLang],
+                translation: finalTranslation,
                 cacheHit: grpcResult.cache_hits[targetLang] || false,
                 // translation_ms: translationDuration,
                 // XLSX 로깅용 추가 정보

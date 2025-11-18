@@ -34,12 +34,21 @@ declare class QueueService {
     private queue;
     private preprocessingResults;
     private preprocessingResolvers;
+    private queueAddCounter;
+    private preprocessingCompleteCounter;
+    private lastQueueAddRps;
+    private lastPreprocessingCompleteRps;
+    private redisWriteTimeSum;
+    private redisWriteCount;
+    private redisReadTimeSum;
+    private redisReadCount;
+    private lastRedisWriteAvg;
+    private lastRedisReadAvg;
     constructor();
     private setupEventHandlers;
     private subscribeToWorker;
     addJob(data: TranslationJob, options?: JobOptions): Promise<Job<TranslationJob>>;
     getJob(jobId: string): Promise<Job<TranslationJob> | null>;
-    waitForResult(jobId: string, timeout?: number): Promise<TranslationResult>;
     /**
      * 전처리 결과 대기
      */
@@ -65,6 +74,11 @@ declare class QueueService {
         performance: {
             avgProcessingTimeMs: number;
             throughputPerMinute: number;
+        };
+        redis: {
+            writeAvgMs: number;
+            readAvgMs: number;
+            lastQueryMs: number;
         };
         stuck: {
             activeCount: number;
@@ -114,6 +128,10 @@ declare class QueueService {
     completeJob(jobId: string, result: TranslationResult, error: string): Promise<void>;
     failedJob(jobId: string): Promise<void>;
     close(): Promise<void>;
+    getRpsMetrics(): {
+        add: number;
+        preprocessingComplete: number;
+    };
 }
 export declare const queueService: QueueService;
 export {};

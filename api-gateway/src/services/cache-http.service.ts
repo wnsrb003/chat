@@ -280,7 +280,15 @@ class CacheHttpService {
         throw new Error(`HTTP ${response.status}`);
       }
 
-      const data = await response.json();
+      const data: {
+        healthy: boolean;
+        status: string;
+        details: Record<string, string>;
+      } = (await response.json()) as {
+        healthy: boolean;
+        status: string;
+        details: Record<string, string>;
+      };
 
       return {
         healthy: data.healthy,

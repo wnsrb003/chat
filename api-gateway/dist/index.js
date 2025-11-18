@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.wsService = void 0;
+exports.wsService = exports.getHttpRps = void 0;
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
@@ -51,6 +51,21 @@ const translate_routes_1 = __importStar(require("./routes/translate.routes"));
 const swagger_1 = require("./config/swagger");
 const app = (0, express_1.default)();
 const server = (0, http_1.createServer)(app);
+// RPS 모니터링 카운터
+let httpRequestCounter = 0;
+let lastHttpRps = 0;
+// 1초마다 RPS 출력
+setInterval(() => {
+    lastHttpRps = httpRequestCounter;
+    // logger.info({
+    //   metric: "API_GATEWAY_HTTP",
+    //   rps: httpRequestCounter,
+    // });
+    httpRequestCounter = 0;
+}, 1000);
+// RPS 카운터 조회 함수 export
+const getHttpRps = () => lastHttpRps;
+exports.getHttpRps = getHttpRps;
 // Middleware
 app.use((0, helmet_1.default)({
     contentSecurityPolicy: {
@@ -66,9 +81,11 @@ app.use((0, cors_1.default)({ origin: config_1.config.cors.origin }));
 app.use((0, compression_1.default)());
 app.use(express_1.default.json({ limit: "10mb" }));
 app.use(express_1.default.urlencoded({ extended: true, limit: "10mb" }));
-// Request logging
+// Request logging and RPS counting
 app.use((req, res, next) => {
+    httpRequestCounter++; // RPS 카운터
     // const start = Date.now();
+    req.on("end", () => { });
     res.on("finish", () => {
         // const duration = Date.now() - start;
         // logger.info(
@@ -95,12 +112,12 @@ exports.wsService = new websocket_service_1.WebSocketService(server);
 // Routes
 app.use("/api/v1", translate_routes_1.default);
 // Error handling
-app.use((err, req, res) => {
+app.use((err, req) => {
     logger_1.logger.error({ url: req.url, err }, "Unhandled error");
-    res.status(500).json({
-        success: false,
-        error: "Internal server error",
-    });
+    // res.status(500).json({
+    //   success: false,
+    //   error: "Internal server error",
+    // });
 });
 // Graceful shutdown
 const shutdown = async () => {

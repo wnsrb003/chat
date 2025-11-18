@@ -4,11 +4,10 @@ exports.setWebSocketService = void 0;
 const express_1 = require("express");
 const zod_1 = require("zod");
 const queue_service_1 = require("../services/queue.service");
-const spellcheck_service_1 = require("../services/spellcheck.service");
-const cache_grpc_service_1 = require("../services/cache-grpc.service");
-const xlsx_logger_service_1 = require("../services/xlsx-logger.service");
+const cache_service_1 = require("../services/cache.service");
 const logger_1 = require("../utils/logger");
 const crypto_1 = require("crypto");
+const index_1 = require("../index");
 const router = (0, express_1.Router)();
 // WebSocket service import (will be set by index.ts)
 let wsService = null;
@@ -110,11 +109,11 @@ router.post("/translate", async (req, res) => {
             options: validatedData.options,
             createdAt: Date.now(),
         });
-        logger_1.logger.debug({
-            msg: "Preprocessing job added",
-            jobId,
-            duration: performance.now() - startTime,
-        });
+        // logger.debug({ // CPU 최적화
+        //   msg: "Preprocessing job added",
+        //   jobId,
+        //   duration: performance.now() - startTime,
+        // });
         // Async mode: return job ID immediately (전처리 + 번역 모두 비동기)
         if (validatedData.async) {
             return res.status(202).json({
@@ -127,36 +126,8 @@ router.post("/translate", async (req, res) => {
         try {
             // Step 2: Wait for preprocessing result from Python worker
             const preprocessingResult = await queue_service_1.queueService.waitForPreprocessing(jobId);
-            logger_1.logger.debug({
-                msg: "Preprocessing completed",
-                jobId,
-                duration: performance.now() - startTime,
-                filtered: preprocessingResult.filtered,
-            });
             // Step 3: Check if filtered
             if (preprocessingResult.filtered) {
-                // Log filtered text to CSV
-                xlsx_logger_service_1.xlsxLoggerService.logTranslation({
-                    timestamp: new Date().toISOString(),
-                    originalText: preprocessingResult.original_text,
-                    preprocessedText: preprocessingResult.preprocessed_text,
-                    detectedLanguage: preprocessingResult.detected_language,
-                    translations: {},
-                    timings: {
-                        preprocessingMs: preprocessingResult.preprocessing_time_ms,
-                        translationMs: 0,
-                        totalMs: performance.now() - startTime,
-                    },
-                    cacheHits: false,
-                    cacheProcessingMs: 0,
-                    filtered: true,
-                    filterReason: preprocessingResult.filter_reason,
-                });
-                // return res.status(400).json({
-                //   success: false,
-                //   error: "Text filtered",
-                //   reason: preprocessingResult.filter_reason,
-                // });
                 const translations = {
                     en: preprocessingResult.original_text,
                     th: preprocessingResult.original_text,
@@ -172,98 +143,93 @@ router.post("/translate", async (req, res) => {
                         translations,
                         detectedLanguage: preprocessingResult.detected_language,
                         cacheHits: false,
-                        timings: {
-                            preprocessing_ms: preprocessingResult.preprocessing_time_ms,
-                            translation_ms: performance.now() - startTime,
-                            total_ms: performance.now() - startTime,
-                        },
+                        preprocessing_ms: preprocessingResult.preprocessing_time_ms,
+                        translation_ms: -1,
+                        total_ms: performance.now() - startTime,
+                        filtered: preprocessingResult.filtered,
+                        filterReason: preprocessingResult.filter_reason,
                     },
                 });
             }
             // Step 4: Call gRPC for each language in parallel
             const allTranslations = {};
-            const allCacheHits = {};
-            const languageTimings = {};
             let maxTranslationTime = 0;
             // 각 언어별로 병렬 처리
             const translationPromises = validatedData.targetLanguages.map(async (targetLang) => {
                 try {
-                    const langStartTime = performance.now();
-                    const grpcResult = await cache_grpc_service_1.cacheGrpcService.translate({
+                    const grpcResult = await cache_service_1.cacheService.translate({
                         text: preprocessingResult.preprocessed_text,
                         source_lang: preprocessingResult.detected_language,
                         target_langs: [targetLang], // 각 언어별로 개별 요청
-                        use_cache: true,
+                        use_cache: false,
                         cache_strategy: "hybrid",
                         translator_name: "vllm",
                     });
-                    const langDuration = performance.now() - langStartTime;
-                    languageTimings[targetLang] = langDuration;
+                    const langDuration = performance.now() - startTime;
                     maxTranslationTime = Math.max(maxTranslationTime, langDuration);
                     if (grpcResult.translations[targetLang]) {
-                        allTranslations[targetLang] = grpcResult.translations[targetLang];
-                        allCacheHits[targetLang] =
-                            grpcResult.cache_hits[targetLang] || false;
-                        // 각 언어별로 CSV 로깅
-                        xlsx_logger_service_1.xlsxLoggerService.logTranslation({
-                            timestamp: new Date().toISOString(),
+                        allTranslations[targetLang] = {
+                            id: jobId,
+                            language: targetLang,
+                            translation: grpcResult.translations[targetLang],
+                            cache_hit: grpcResult.cache_hits[targetLang] || false,
                             originalText: preprocessingResult.original_text,
                             preprocessedText: preprocessingResult.preprocessed_text,
                             detectedLanguage: preprocessingResult.detected_language,
-                            translations: {
-                                [targetLang]: grpcResult.translations[targetLang],
-                            },
-                            timings: {
-                                preprocessingMs: preprocessingResult.preprocessing_time_ms,
-                                translationMs: langDuration,
-                                totalMs: preprocessingResult.preprocessing_time_ms + langDuration,
-                            },
-                            cacheHits: grpcResult.cache_hits[targetLang] || false,
-                            cacheProcessingMs: grpcResult.processing_time_ms,
-                            filtered: false,
-                        });
-                        logger_1.logger.debug({
-                            msg: "Parallel translation completed",
-                            targetLang,
-                            duration: langDuration,
-                        });
+                            total_ms: langDuration,
+                            preprocessing_ms: preprocessingResult.preprocessing_time_ms,
+                            cache_processing_ms: grpcResult.processing_time_ms,
+                            cache_lookup_time_ms: grpcResult.cache_lookup_time_ms || -1,
+                            llm_response_time_ms: grpcResult.llm_response_time_ms || -1,
+                            filtered: preprocessingResult.filtered,
+                            filter_reason: preprocessingResult.filter_reason,
+                        };
+                        // allTranslations[targetLang].originalText =
+                        //   preprocessingResult.original_text;
+                        // allTranslations[targetLang] = grpcResult.translations[targetLang];
+                        // allCacheHits[targetLang] =
+                        //   grpcResult.cache_hits[targetLang] || false;
+                        // cacheTimings[targetLang] = grpcResult.cache_lookup_time_ms || -1;
+                        // llmTimings[targetLang] = grpcResult.llm_response_time_ms || -1;
+                        // cacheTotalTimings[targetLang] =
+                        //   grpcResult.processing_time_ms || -1;
                     }
                 }
                 catch (error) {
                     logger_1.logger.error({ error, targetLang }, `Translation failed for ${targetLang}`);
                     // 실패한 언어는 빈 문자열로 처리
-                    allTranslations[targetLang] = "";
-                    allCacheHits[targetLang] = false;
-                    languageTimings[targetLang] = 0;
+                    allTranslations[targetLang] = {};
                 }
             });
             // 모든 언어 번역 완료 대기
             await Promise.all(translationPromises);
-            const totalDuration = performance.now() - startTime;
-            logger_1.logger.info({
-                msg: "Translation completed (parallel)",
-                jobId,
-                preprocessingTime: preprocessingResult.preprocessing_time_ms,
-                maxTranslationTime: maxTranslationTime,
-                totalTime: totalDuration,
-                languageCount: validatedData.targetLanguages.length,
-            });
+            // logger.info({ // CPU 최적화
+            //   msg: "Translation completed (parallel)",
+            //   jobId,
+            //   preprocessingTime: preprocessingResult.preprocessing_time_ms,
+            //   maxTranslationTime: maxTranslationTime,
+            //   totalTime: totalDuration,
+            //   languageCount: validatedData.targetLanguages.length,
+            // });
             // Step 5: Return result
             return res.json({
                 success: true,
-                data: {
-                    id: jobId,
-                    originalText: preprocessingResult.original_text,
-                    preprocessedText: preprocessingResult.preprocessed_text,
-                    translations: allTranslations,
-                    detectedLanguage: preprocessingResult.detected_language,
-                    cacheHits: allCacheHits,
-                    timings: {
-                        preprocessing_ms: preprocessingResult.preprocessing_time_ms,
-                        translation_ms: maxTranslationTime,
-                        total_ms: totalDuration,
-                    },
-                },
+                // data: {
+                //   id: jobId,
+                //   originalText: preprocessingResult.original_text,
+                //   preprocessedText: preprocessingResult.preprocessed_text,
+                //   translations: allTranslations,
+                //   detectedLanguage: preprocessingResult.detected_language,
+                //   cacheHits: allCacheHits,
+                //   timings: {
+                //     preprocessing_ms: preprocessingResult.preprocessing_time_ms,
+                //     total_ms: totalDuration,
+                //   },
+                //   cacheTimings: { cacheTotalTimings, cacheTimings, llmTimings },
+                //   filtered: false,
+                //   filter_reason: "",
+                // },
+                data: allTranslations,
             });
         }
         catch (error) {
@@ -394,9 +360,9 @@ router.get("/jobs/:jobId", async (req, res) => {
     }
 });
 // POST /api/v1/spellcheck
-const spellCheckSchema = zod_1.z.object({
-    text: zod_1.z.string().min(1).max(5000),
-});
+// const spellCheckSchema = z.object({
+//   text: z.string().min(1).max(5000),
+// });
 /**
  * @swagger
  * /api/v1/spellcheck:
@@ -445,42 +411,45 @@ const spellCheckSchema = zod_1.z.object({
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.post("/spellcheck", async (req, res) => {
-    try {
-        const validatedData = spellCheckSchema.parse(req.body);
-        if (!spellcheck_service_1.spellCheckService.isReady()) {
-            return res.status(503).json({
-                success: false,
-                error: "Spell checker is initializing. Please try again in a few seconds.",
-            });
-        }
-        const startTime = Date.now();
-        const result = spellcheck_service_1.spellCheckService.check(validatedData.text);
-        const duration = Date.now() - startTime;
-        logger_1.logger.info({ text: validatedData.text, hasErrors: result.hasErrors, duration }, "Spell check completed successfully");
-        return res.json({
-            success: true,
-            data: result,
-            meta: {
-                duration,
-            },
-        });
-    }
-    catch (error) {
-        if (error instanceof zod_1.z.ZodError) {
-            return res.status(400).json({
-                success: false,
-                error: "Validation error",
-                details: error.errors,
-            });
-        }
-        logger_1.logger.error({ error }, "Spell check request failed");
-        return res.status(500).json({
-            success: false,
-            error: "Internal server error",
-        });
-    }
-});
+// router.post("/spellcheck", async (req: Request, res: Response) => {
+//   try {
+//     const validatedData = spellCheckSchema.parse(req.body);
+//     if (!spellCheckService.isReady()) {
+//       return res.status(503).json({
+//         success: false,
+//         error:
+//           "Spell checker is initializing. Please try again in a few seconds.",
+//       });
+//     }
+//     const startTime = Date.now();
+//     const result = spellCheckService.check(validatedData.text);
+//     const duration = Date.now() - startTime;
+//     logger.info(
+//       { text: validatedData.text, hasErrors: result.hasErrors, duration },
+//       "Spell check completed successfully"
+//     );
+//     return res.json({
+//       success: true,
+//       data: result,
+//       meta: {
+//         duration,
+//       },
+//     });
+//   } catch (error) {
+//     if (error instanceof z.ZodError) {
+//       return res.status(400).json({
+//         success: false,
+//         error: "Validation error",
+//         details: error.errors,
+//       });
+//     }
+//     logger.error({ error }, "Spell check request failed");
+//     return res.status(500).json({
+//       success: false,
+//       error: "Internal server error",
+//     });
+//   }
+// });
 /**
  * @swagger
  * /api/v1/health:
@@ -519,7 +488,7 @@ router.get("/health", async (_req, res) => {
             success: true,
             status: "healthy",
             queue: stats,
-            spellChecker: spellcheck_service_1.spellCheckService.isReady() ? "ready" : "initializing",
+            // spellChecker: spellCheckService.isReady() ? "ready" : "initializing",
             timestamp: Date.now(),
         });
     }
@@ -646,64 +615,72 @@ async function processLanguageIndependently(text, targetLang, options, metadata)
             options: options,
             createdAt: Date.now(),
         });
-        logger_1.logger.debug({ jobId, targetLang }, "Independent job started");
+        // logger.debug({ jobId, targetLang }, "Independent job started"); // CPU 최적화
         // Step 2: 전처리 결과 대기
         const preprocessingResult = await queue_service_1.queueService.waitForPreprocessing(jobId);
+        const gateway_preprocessing_time_ms = performance.now() - startTime;
+        // const preprocessingResult = {
+        //   preprocessed_text: text,
+        //   detected_language: "ko",
+        //   original_text: text,
+        //   preprocessing_time_ms: 0,
+        //   filtered: false,
+        //   filter_reason: "",
+        // };
         if (preprocessingResult.filtered) {
-            logger_1.logger.warn({ jobId, targetLang }, "Text filtered in preprocessing");
+            // logger.warn({ jobId, targetLang }, "Text filtered in preprocessing");
+            // 필터링 메시지 브로드캐스트 (CPU 최적화: 주석 처리 가능)
             if (wsService) {
                 wsService.broadcast({
-                    type: "preprocessing-complete",
+                    type: "partial-translation",
                     jobId,
                     data: {
                         language: targetLang,
+                        translation: preprocessingResult.original_text,
+                        cacheHit: false,
+                        total_ms: performance.now() - startTime,
+                        // XLSX 로깅용 추가 정보
                         originalText: preprocessingResult.original_text,
-                        preprocessedText: preprocessingResult.original_text,
+                        preprocessedText: preprocessingResult.preprocessed_text,
                         detectedLanguage: preprocessingResult.detected_language,
+                        gateway_preprocessing_time_ms: gateway_preprocessing_time_ms,
                         preprocessing_ms: preprocessingResult.preprocessing_time_ms,
-                        reason: preprocessingResult.filter_reason,
+                        cache_processing_ms: -1,
+                        cache_lookup_time_ms: -1,
+                        llm_response_time_ms: -1,
                         metadata,
+                        filtered: true,
+                        filter_reason: preprocessingResult.filter_reason,
                     },
                 });
-                // wsService.broadcast({
-                //   type: "partial-error",
-                //   jobId,
-                //   data: {
-                //     language: targetLang,
-                //     error: "Text filtered",
-                //     reason: preprocessingResult.filter_reason,
-                //     metadata,
-                //   },
-                // });
             }
             return;
         }
-        // Step 3: 전처리 완료 브로드캐스트
-        if (wsService) {
-            wsService.broadcast({
-                type: "preprocessing-complete",
-                jobId,
-                data: {
-                    language: targetLang,
-                    originalText: preprocessingResult.original_text,
-                    preprocessedText: preprocessingResult.preprocessed_text,
-                    detectedLanguage: preprocessingResult.detected_language,
-                    preprocessing_ms: preprocessingResult.preprocessing_time_ms,
-                    metadata,
-                },
-            });
-        }
+        // Step 3: 전처리 완료 브로드캐스트 (CPU 사용 주의: 4개 언어 = 4번 broadcast)
+        // 성능 최적화: 전처리 메시지 생략 가능 (번역 완료 메시지만으로 충분)
+        // if (wsService) {
+        //   wsService.broadcast({
+        //     type: "preprocessing-complete",
+        //     jobId,
+        //     data: {
+        //       language: targetLang,
+        //       originalText: preprocessingResult.original_text,
+        //       preprocessedText: preprocessingResult.preprocessed_text,
+        //       detectedLanguage: preprocessingResult.detected_language,
+        //       preprocessing_ms: preprocessingResult.preprocessing_time_ms,
+        //       metadata,
+        //     },
+        //   });
+        // }
         // Step 4: 번역 (단일 언어)
-        const translationStartTime = performance.now();
-        const grpcResult = await cache_grpc_service_1.cacheGrpcService.translate({
+        const grpcResult = await cache_service_1.cacheService.translate({
             text: preprocessingResult.preprocessed_text,
             source_lang: preprocessingResult.detected_language,
             target_langs: [targetLang],
-            use_cache: true,
+            use_cache: false,
             cache_strategy: "hybrid",
             translator_name: "vllm",
         });
-        const translationDuration = performance.now() - translationStartTime;
         const totalDuration = performance.now() - startTime;
         // Step 5: 번역 완료 브로드캐스트
         if (grpcResult.translations[targetLang]) {
@@ -715,35 +692,20 @@ async function processLanguageIndependently(text, targetLang, options, metadata)
                         language: targetLang,
                         translation: grpcResult.translations[targetLang],
                         cacheHit: grpcResult.cache_hits[targetLang] || false,
-                        translation_ms: translationDuration,
                         total_ms: totalDuration,
+                        // XLSX 로깅용 추가 정보
+                        originalText: preprocessingResult.original_text,
+                        preprocessedText: preprocessingResult.preprocessed_text,
+                        detectedLanguage: preprocessingResult.detected_language,
+                        gateway_preprocessing_time_ms: gateway_preprocessing_time_ms,
+                        preprocessing_ms: preprocessingResult.preprocessing_time_ms,
+                        cache_processing_ms: grpcResult.processing_time_ms,
+                        cache_lookup_time_ms: grpcResult.cache_lookup_time_ms,
+                        llm_response_time_ms: grpcResult.llm_response_time_ms,
                         metadata,
                     },
                 });
             }
-            // CSV 로깅
-            xlsx_logger_service_1.xlsxLoggerService.logTranslation({
-                timestamp: new Date().toISOString(),
-                originalText: preprocessingResult.original_text,
-                preprocessedText: preprocessingResult.preprocessed_text,
-                detectedLanguage: preprocessingResult.detected_language,
-                translations: {
-                    [targetLang]: grpcResult.translations[targetLang],
-                },
-                timings: {
-                    preprocessingMs: preprocessingResult.preprocessing_time_ms,
-                    translationMs: translationDuration,
-                    totalMs: totalDuration,
-                },
-                cacheHits: grpcResult.cache_hits[targetLang],
-                cacheProcessingMs: grpcResult.processing_time_ms,
-                filtered: false,
-            });
-            logger_1.logger.info({
-                jobId,
-                targetLang,
-                duration: totalDuration,
-            }, "Independent translation completed");
         }
     }
     catch (error) {
@@ -766,10 +728,13 @@ router.post("/broadcast", async (req, res) => {
     try {
         const validatedData = translateSchema.parse(req.body);
         const metadata = req.body.metadata || {};
-        logger_1.logger.info({
-            text: validatedData.text.substring(0, 50),
-            languageCount: validatedData.targetLanguages.length,
-        }, "Broadcast request received");
+        // logger.info( // CPU 최적화: 로그 생략
+        //   {
+        //     text: validatedData.text.substring(0, 50),
+        //     languageCount: validatedData.targetLanguages.length,
+        //   },
+        //   "Broadcast request received"
+        // );
         // 각 언어를 완전히 독립적으로 처리 (fire-and-forget)
         validatedData.targetLanguages.forEach((targetLang) => {
             processLanguageIndependently(validatedData.text, targetLang, validatedData.options, metadata).catch((error) => {
@@ -823,6 +788,55 @@ router.get("/queue/stats", async (_req, res) => {
     }
     catch (error) {
         logger_1.logger.error({ error }, "Failed to get queue stats");
+        return res.status(500).json({
+            success: false,
+            error: "Internal server error",
+        });
+    }
+});
+/**
+ * @swagger
+ * /api/v1/rps/stats:
+ *   get:
+ *     summary: Get real-time RPS statistics
+ *     description: Get real-time requests per second statistics from all services
+ *     tags: [RPS]
+ *     responses:
+ *       200:
+ *         description: RPS statistics retrieved successfully
+ *       500:
+ *         description: Internal server error
+ */
+router.get("/rps/stats", (_req, res) => {
+    try {
+        const queueMetrics = queue_service_1.queueService.getRpsMetrics();
+        const wsMetrics = wsService
+            ? wsService.getRpsMetrics()
+            : {
+                connections: 0,
+                translateRequest: 0,
+                translationComplete: 0,
+            };
+        const cacheGrpcMetrics = cache_service_1.cacheService.getRpsMetrics();
+        const data = {
+            apiGateway: (0, index_1.getHttpRps)(),
+            queue: queueMetrics,
+            websocket: wsMetrics,
+            cacheGrpc: cacheGrpcMetrics,
+            worker: {
+                // Python worker metrics will be added via separate endpoint or WebSocket
+                processing: 0,
+                complete: 0,
+            },
+        };
+        return res.json({
+            success: true,
+            data,
+            timestamp: Date.now(),
+        });
+    }
+    catch (error) {
+        logger_1.logger.error({ error }, "Failed to get RPS stats");
         return res.status(500).json({
             success: false,
             error: "Internal server error",

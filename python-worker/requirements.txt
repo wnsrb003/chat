@@ -8,7 +8,8 @@ git+https://github.com/haven-jeon/PyKoSpacing.git
 tensorflow==2.20.0
 numpy>=1.26.0
 kss==6.0.5
-symspellpy-ko==0.1.3
+kiwipiepy>=0.18.0  # 형태소 분석 + 오타 교정 (symspellpy-ko 대체)
+# symspellpy-ko==0.1.3  # kiwipiepy로 대체됨
 
 # Logging
 loguru==0.7.2

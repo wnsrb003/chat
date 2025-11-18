@@ -385,9 +385,9 @@ router.get("/jobs/:jobId", async (req: Request, res: Response) => {
 });
 
 // POST /api/v1/spellcheck
-const spellCheckSchema = z.object({
-  text: z.string().min(1).max(5000),
-});
+// const spellCheckSchema = z.object({
+//   text: z.string().min(1).max(5000),
+// });
 
 /**
  * @swagger

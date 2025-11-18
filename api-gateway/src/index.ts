@@ -55,6 +55,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use((req, res, next) => {
   httpRequestCounter++; // RPS 카운터
   // const start = Date.now();
+  req.on("end", () => {});
   res.on("finish", () => {
     // const duration = Date.now() - start;
     // logger.info(
@@ -90,7 +91,7 @@ setWebSocketService(wsService);
 app.use("/api/v1", translateRoutes);
 
 // Error handling
-app.use((err: Error, req: express.Request, res: express.Response) => {
+app.use((err: Error, req: express.Request) => {
   logger.error({ url: req.url, err }, "Unhandled error");
   // res.status(500).json({
   //   success: false,

@@ -12,7 +12,44 @@ class QueueService {
     queue;
     preprocessingResults = new Map();
     preprocessingResolvers = new Map();
+    // RPS 모니터링
+    queueAddCounter = 0;
+    preprocessingCompleteCounter = 0;
+    lastQueueAddRps = 0;
+    lastPreprocessingCompleteRps = 0;
+    // Redis 성능 모니터링
+    redisWriteTimeSum = 0;
+    redisWriteCount = 0;
+    redisReadTimeSum = 0;
+    redisReadCount = 0;
+    lastRedisWriteAvg = 0;
+    lastRedisReadAvg = 0;
     constructor() {
+        // Queue 삽입 RPS 모니터링
+        setInterval(() => {
+            this.lastQueueAddRps = this.queueAddCounter;
+            this.lastPreprocessingCompleteRps = this.preprocessingCompleteCounter;
+            // Redis 성능 평균 계산
+            this.lastRedisWriteAvg = this.redisWriteCount > 0
+                ? this.redisWriteTimeSum / this.redisWriteCount
+                : 0;
+            this.lastRedisReadAvg = this.redisReadCount > 0
+                ? this.redisReadTimeSum / this.redisReadCount
+                : 0;
+            // logger.info({
+            //   metric: "QUEUE_SERVICE",
+            //   queue_add_rps: this.queueAddCounter,
+            //   preprocessing_complete_rps: this.preprocessingCompleteCounter,
+            //   redis_write_avg_ms: this.lastRedisWriteAvg.toFixed(2),
+            //   redis_read_avg_ms: this.lastRedisReadAvg.toFixed(2),
+            // });
+            this.queueAddCounter = 0;
+            this.preprocessingCompleteCounter = 0;
+            this.redisWriteTimeSum = 0;
+            this.redisWriteCount = 0;
+            this.redisReadTimeSum = 0;
+            this.redisReadCount = 0;
+        }, 1000);
         this.queue = new bull_1.default(config_1.config.queue.name, {
             // Bull이 Redis 클라이언트를 생성할 때 호출 (client, bclient, eclient 총 3개)
             createClient: (type) => {
@@ -85,6 +122,7 @@ class QueueService {
                     status,
                 });
                 if (status === "completed") {
+                    this.preprocessingCompleteCounter++; // RPS 카운터
                     // 전처리 결과 저장
                     this.preprocessingResults.set(jobId, result);
                     // Bull job을 completed로 마킹 (통계 업데이트를 위해)
@@ -141,27 +179,21 @@ class QueueService {
         });
     }
     async addJob(data, options) {
+        this.queueAddCounter++; // RPS 카운터
+        const startTime = performance.now();
         const job = await this.queue.add(data, {
             jobId: data.id,
             ...options,
         });
+        const duration = performance.now() - startTime;
+        // Redis 쓰기 시간 측정
+        this.redisWriteTimeSum += duration;
+        this.redisWriteCount++;
         logger_1.logger.debug({ jobId: job.id, text: data.text }, "Job added to queue");
         return job;
     }
     async getJob(jobId) {
         return this.queue.getJob(jobId);
-    }
-    async waitForResult(jobId, timeout = config_1.config.queue.timeout) {
-        const job = await this.getJob(jobId);
-        // logger.info({ jobId, job }, "Waiting for result");
-        // console.log(job, jobId, "@@@");
-        if (!job) {
-            throw new Error(`Job ${jobId} not found`);
-        }
-        return Promise.race([
-            job.finished(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error("Job timeout")), timeout)),
-        ]);
     }
     /**
      * 전처리 결과 대기
@@ -182,6 +214,7 @@ class QueueService {
         ]);
     }
     async getQueueStats() {
+        const startTime = performance.now();
         const [waiting, active, completed, failed, delayed] = await Promise.all([
             this.queue.getWaitingCount(),
             this.queue.getActiveCount(),
@@ -189,6 +222,10 @@ class QueueService {
             this.queue.getFailedCount(),
             this.queue.getDelayedCount(),
         ]);
+        const duration = performance.now() - startTime;
+        // Redis 읽기 시간 측정
+        this.redisReadTimeSum += duration;
+        this.redisReadCount++;
         return {
             waiting,
             active,
@@ -199,6 +236,7 @@ class QueueService {
         };
     }
     async getDetailedStats() {
+        const redisStartTime = performance.now();
         const [waiting, active, completed, failed, delayed, paused, activeJobs, waitingJobs, completedJobs, failedJobs,] = await Promise.all([
             this.queue.getWaitingCount(),
             this.queue.getActiveCount(),
@@ -211,6 +249,10 @@ class QueueService {
             this.queue.getCompleted(0, 10), // 최근 10개 completed jobs
             this.queue.getFailed(0, 10), // 최근 10개 failed jobs
         ]);
+        const redisReadDuration = performance.now() - redisStartTime;
+        // Redis 읽기 시간 측정
+        this.redisReadTimeSum += redisReadDuration;
+        this.redisReadCount++;
         const now = Date.now();
         // Stuck 판단 기준 (ms) - 전처리 전용으로 조정
         const ACTIVE_STUCK_THRESHOLD = 5000; // 5초 이상 처리 중 (전처리는 빠름)
@@ -250,14 +292,19 @@ class QueueService {
                 avgProcessingTimeMs: Math.round(avgProcessingTime),
                 throughputPerMinute,
             },
+            redis: {
+                writeAvgMs: parseFloat(this.lastRedisWriteAvg.toFixed(2)),
+                readAvgMs: parseFloat(this.lastRedisReadAvg.toFixed(2)),
+                lastQueryMs: parseFloat(redisReadDuration.toFixed(2)),
+            },
             stuck: {
                 activeCount: stuckActiveJobs.length,
                 waitingCount: stuckWaitingJobs.length,
                 totalStuck: stuckActiveJobs.length + stuckWaitingJobs.length,
                 stuckActiveJobs: stuckActiveJobs.map((job) => ({
                     id: job.id,
-                    text: job.data.text.substring(0, 50),
-                    targetLanguages: job.data.targetLanguages,
+                    text: job.data?.text?.substring(0, 50) || 'N/A',
+                    targetLanguages: job.data?.targetLanguages || [],
                     startedAt: job.processedOn,
                     elapsedMs: job.processedOn ? now - job.processedOn : 0,
                     stuckForSeconds: job.processedOn
@@ -266,8 +313,8 @@ class QueueService {
                 })),
                 stuckWaitingJobs: stuckWaitingJobs.map((job) => ({
                     id: job.id,
-                    text: job.data.text.substring(0, 50),
-                    targetLanguages: job.data.targetLanguages,
+                    text: job.data?.text?.substring(0, 50) || 'N/A',
+                    targetLanguages: job.data?.targetLanguages || [],
                     createdAt: job.timestamp,
                     waitingMs: now - job.timestamp,
                     waitingForSeconds: Math.round((now - job.timestamp) / 1000),
@@ -275,27 +322,27 @@ class QueueService {
             },
             activeJobs: activeJobs.slice(0, 10).map((job) => ({
                 id: job.id,
-                text: job.data.text.substring(0, 50),
-                targetLanguages: job.data.targetLanguages,
+                text: job.data?.text?.substring(0, 50) || 'N/A',
+                targetLanguages: job.data?.targetLanguages || [],
                 startedAt: job.processedOn,
                 elapsedMs: job.processedOn ? now - job.processedOn : 0,
             })),
             waitingJobs: waitingJobs.slice(0, 10).map((job) => ({
                 id: job.id,
-                text: job.data.text.substring(0, 50),
-                targetLanguages: job.data.targetLanguages,
+                text: job.data?.text?.substring(0, 50) || 'N/A',
+                targetLanguages: job.data?.targetLanguages || [],
                 waitingMs: now - job.timestamp,
             })),
             recentCompleted: completedJobs.slice(0, 5).map((job) => ({
                 id: job.id,
-                text: job.data.text.substring(0, 50),
+                text: job.data?.text?.substring(0, 50) || 'N/A',
                 processingTimeMs: job.finishedOn && job.processedOn
                     ? job.finishedOn - job.processedOn
                     : 0,
             })),
             recentFailed: failedJobs.slice(0, 5).map((job) => ({
                 id: job.id,
-                text: job.data.text.substring(0, 50),
+                text: job.data?.text?.substring(0, 50) || 'N/A',
                 error: job.failedReason,
             })),
         };
@@ -337,6 +384,13 @@ class QueueService {
     async close() {
         await this.queue.close();
         logger_1.logger.info("Queue closed");
+    }
+    // RPS 조회 함수
+    getRpsMetrics() {
+        return {
+            add: this.lastQueueAddRps,
+            preprocessingComplete: this.lastPreprocessingCompleteRps,
+        };
     }
 }
 exports.queueService = new QueueService();

@@ -52,9 +52,8 @@ def process_bull_job(job_id: str, job_data: dict) -> dict:
         options = job.options or PreprocessOptions()
 
         # 1. 전처리
-        preprocess_start = time.time()
         try:
-            preprocessed_text, filtered, filter_reason = preprocessor.preprocess(
+            preprocessed_text, filtered, filter_reason, emoticons = preprocessor.preprocess(
                 text=job.text,
                 expand_abbreviations=options.expand_abbreviations,
                 filter_profanity=options.filter_profanity,
@@ -64,17 +63,14 @@ def process_bull_job(job_id: str, job_data: dict) -> dict:
                 add_spacing=options.add_spacing,
             )
         except Exception as e:
+            print(e)
             logger.error(f"Preprocessing failed: {e}", exc_info=True)
             return None
 
-        preprocess_time = (time.time() - preprocess_start) * 1000  # ms
-
         # 2. 언어 감지
-        lang_detect_start = time.time()
         detected_lang = preprocessor.detect_language(preprocessed_text)
         if not detected_lang:
             detected_lang = "ko"  # 기본값
-        lang_detect_time = (time.time() - lang_detect_start) * 1000  # ms
 
         processing_time = (time.time() - start_time) * 1000  # ms
 
@@ -86,6 +82,7 @@ def process_bull_job(job_id: str, job_data: dict) -> dict:
             "preprocessing_time_ms": processing_time,
             "filtered": filtered,
             "filter_reason": filter_reason if filtered else None,
+            "emoticons": emoticons
         }
 
         logger.debug(f"Job {job_id} preprocessing completed in {processing_time:.0f}ms")

@@ -28,10 +28,12 @@ exports.config = {
         origin: process.env.CORS_ORIGIN || "*",
     },
     logging: {
-        level: process.env.LOG_LEVEL || "info",
+        level: process.env.LOG_LEVEL || "warn", // info → warn (CPU 절약)
     },
     cacheService: {
+        protocol: (process.env.CACHE_SERVICE_PROTOCOL || "grpc"),
         grpcUrl: process.env.CACHE_SERVICE_GRPC_URL || "192.168.190.158:50051",
+        httpUrl: process.env.CACHE_SERVICE_HTTP_URL || "http://192.168.190.158:8000",
         timeout: parseInt(process.env.CACHE_SERVICE_TIMEOUT || "30000", 10),
     },
 };

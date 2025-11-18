@@ -8,15 +8,17 @@ const pino_1 = __importDefault(require("pino"));
 const config_1 = require("../config");
 exports.logger = (0, pino_1.default)({
     level: config_1.config.logging.level,
-    transport: config_1.config.env === "development"
-        ? {
-            target: "pino-pretty",
-            options: {
-                colorize: true,
-                translateTime: "HH:MM:ss",
-                ignore: "pid,hostname",
-            },
-        }
-        : undefined,
+    // pino-pretty 비활성화 (CPU 사용량 50% 감소)
+    // transport:
+    //   config.env === "development"
+    //     ? {
+    //         target: "pino-pretty",
+    //         options: {
+    //           colorize: true,
+    //           translateTime: "HH:MM:ss",
+    //           ignore: "pid,hostname",
+    //         },
+    //       }
+    //     : undefined,
 });
 //# sourceMappingURL=logger.js.map

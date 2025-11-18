@@ -12,14 +12,22 @@ except ImportError:
     PYKOSPACING_AVAILABLE = False
     logger.warning("PyKoSpacing not available. Spacing correction will be disabled.")
 
-# symspellpy-ko import (맞춤법 교정)
+# kiwipiepy import (형태소 분석 + 오타 교정)
 try:
-    from symspellpy_ko import KoSymSpell
-    from symspellpy import Verbosity
-    SYMSPELL_AVAILABLE = True
+    from kiwipiepy import Kiwi
+    KIWI_AVAILABLE = True
 except ImportError:
-    SYMSPELL_AVAILABLE = False
-    logger.warning("symspellpy-ko not available. Advanced spell checking will be disabled.")
+    KIWI_AVAILABLE = False
+    logger.warning("kiwipiepy not available. Morpheme analysis and typo correction will be disabled.")
+
+# symspellpy-ko import (맞춤법 교정) - kiwipiepy로 대체됨
+# try:
+#     from symspellpy_ko import KoSymSpell
+#     from symspellpy import Verbosity
+#     SYMSPELL_AVAILABLE = True
+# except ImportError:
+#     SYMSPELL_AVAILABLE = False
+#     logger.warning("symspellpy-ko not available. Advanced spell checking will be disabled.")
 
 try:
     import kss
@@ -51,26 +59,28 @@ class TextPreprocessor:
         "ㅎㅇ": "하이",
         "ㅂㅂ": "바이바이",
         "ㅂㅇ": "바이",
-        "ㅌㅌ": "도망가",
 
         # 감정/반응
         "ㅇㅈ": "인정",
         "ㅁㅊ": "미쳤어",
-        "ㄷㄷ": "떨어",
-        "ㅜㅜ": "흑흑",
+        "ㄷㄷ": "덜덜",
+        "ㅜㅜ": "흑흑", 
         "ㅠㅠ": "흑흑",
         "ㄲㅂ": "아깝다",
         "ㅅㄱ": "수고",
 
         # 동의/긍정
         "ㅇㅋ": "오케이",
+        "ㅇㅋㅇ": "오케이",
         "ㄱㅊ": "괜찮아",
         "ㄱㅅ": "감사",
+        "ㅇㅇ": "응",
 
         # 부정/거부
         "ㄴㄴ": "노노",
         "ㅈㅅ": "죄송",
         "ㅁㄹ": "모르겠어",
+        "ㅌㅌ": "도망쳐",
 
         # 웃음
         "ㅋㅋ": "하하",
@@ -87,13 +97,16 @@ class TextPreprocessor:
         "ㅇㄱㄹㅇ": "이거 진짜",
         "ㄹㅈㄷ": "레전드",
         "ㅍㅇㅌ": "파이팅",
+        "ㄷㅇㅂㅈ": "다음에 보자",
+        "ㄹㅇㅍㅌ": "진짜 사실이야",
+        "ㄲㅈ": "재미있어",
+        "ㄴㅈ": "재미없어",
+        "ㄲㅂ": "아깝다"
     }
 
     # 신조어 사전 (대폭 확장)
     SLANG_DICT = {
         # 인터넷 신조어
-        "ㄹㅈㄷ": "레전드",
-        "ㅈㄱㄴ": "지금",
         "레게노": "레전드",
         "갓": "최고",
         "고트": "최고",
@@ -101,9 +114,11 @@ class TextPreprocessor:
         "졸라": "엄청",
         "개꿀": "엄청 좋은",
         "꿀잼": "재미있어",
+        "개꿀잼": "재미있어",
         "노잼": "재미없어",
+        "개노잼": "재미없어",
         "띵작": "명작",
-        "명작": "최고작품",
+        # "명작": "최고작품",
         "갓작": "최고작품",
 
         # 줄임말
@@ -113,56 +128,47 @@ class TextPreprocessor:
         "개빡침": "엄청 화남",
         "별로": "그냥 그래",
         "개별로": "정말 안좋아",
-        "좋아욥": "좋아요",
-        "좋아염": "좋아요",
-        "나쁘지않음": "나쁘지않아요",
-        "웃김": "웃겨요",
-        "웃기네": "웃겨요",
-        "인정함": "인정해요",
-        "쩔수지": "어쩔수없지",
-        "쩔수": "어쩔수없지",
+        "쩔수지": "어쩔 수 없지",
+        "쩔수": "어쩔 수 없지",
         "까비지": "아깝다",
         "까비": "아깝다",
         "쩔지": "대단하지",
-
-        # 오타 패턴
-        "ㅇㅇ": "응",
-        "ㄴㄴ": "아니",
+        "쩐다": "대단하다",
 
         # 영어 섞인 표현
-        "굿": "좋아",
-        "베드": "나빠",
-        "나이스": "좋아",
-        "오케이": "괜찮아",
-        "베리": "매우",
-        "베리굿": "아주좋아",
+        # "굿": "좋아",
+        # "베드": "나빠",
+        # "나이스": "좋아",
+        # "오케이": "괜찮아",
+        # "베리": "매우",
+        # "베리굿": "아주좋아",
 
         # 방송 관련
     }
 
     # symspell 사전에 오타로 등록된 것들을 추가 교정하는 패턴
     # (symspell이 먼저 실행되고, 이 패턴들이 나중에 적용됨)
-    TYPO_PATTERNS = {
-        # === 되/돼 관련 (symspell 사전에 오타로 등록됨) ===
-        r'\b됬어요\b': '됐어요',
-        r'\b됬습니다\b': '됐습니다',
-        r'\b됬네요\b': '됐네요',
-        r'\b됬다\b': '됐다',
-        r'\b됬어\b': '됐어',
-        r'\b되요\b': '돼요',
-        r'\b되세요\b': '돼세요',
-        r'\b안되요\b': '안 돼요',
-        r'\b안돼요\b': '안 돼요',
+    # TYPO_PATTERNS = {
+    #     # === 되/돼 관련 (symspell 사전에 오타로 등록됨) ===
+    #     r'\b됬어요\b': '됐어요',
+    #     r'\b됬습니다\b': '됐습니다',
+    #     r'\b됬네요\b': '됐네요',
+    #     r'\b됬다\b': '됐다',
+    #     r'\b됬어\b': '됐어',
+    #     r'\b되요\b': '돼요',
+    #     r'\b되세요\b': '돼세요',
+    #     r'\b안되요\b': '안 돼요',
+    #     r'\b안돼요\b': '안 돼요',
 
-        # === 하려/할려 관련 ===
-        r'\b할려고\b': '하려고',
-        r'\b할려면\b': '하려면',
-        r'\b할려\b': '하려',
+    #     # === 하려/할려 관련 ===
+    #     r'\b할려고\b': '하려고',
+    #     r'\b할려면\b': '하려면',
+    #     r'\b할려\b': '하려',
 
-        # === 왠/웬 관련 (symspell이 일부 처리) ===
-        r'\b왠만\b': '웬만',
-        r'\b왠일\b': '웬일',
-    }
+    #     # === 왠/웬 관련 (symspell이 일부 처리) ===
+    #     r'\b왠만\b': '웬만',
+    #     r'\b왠일\b': '웬일',
+    # }
 
     # 욕설 패턴 (일부만 예시)
     PROFANITY_PATTERNS = [
@@ -179,7 +185,7 @@ class TextPreprocessor:
     def __init__(self):
         self.profanity_regex = re.compile('|'.join(self.PROFANITY_PATTERNS), re.IGNORECASE)
         # 오타 패턴 컴파일
-        self.typo_patterns = [(re.compile(pattern), replacement) for pattern, replacement in self.TYPO_PATTERNS.items()]
+        # self.typo_patterns = [(re.compile(pattern), replacement) for pattern, replacement in self.TYPO_PATTERNS.items()]
 
         # PyKoSpacing 초기화 (사용 가능한 경우)
         if PYKOSPACING_AVAILABLE:
@@ -192,17 +198,32 @@ class TextPreprocessor:
         else:
             self.spacing_model = None
 
-        # symspellpy-ko 초기화 (사용 가능한 경우)
-        if SYMSPELL_AVAILABLE:
+        # kiwipiepy 초기화 (형태소 분석 + 오타 교정)
+        if KIWI_AVAILABLE:
             try:
-                self.sym_spell = KoSymSpell(max_dictionary_edit_distance=2, prefix_length=10)
-                self.sym_spell.load_korean_dictionary(decompose_korean=True, load_bigrams=False)
-                logger.info("✅ symspellpy-ko spell checker loaded successfully")
+                # typos='basic_with_continual': 기본 오타 + 연철 오타 교정
+                # model_type 미지정: 기본 모델 사용 (knlm)
+                self.kiwi = Kiwi(
+                    typos='basic_with_continual'
+                )
+                logger.info("✅ kiwipiepy morpheme analyzer loaded successfully (typos=basic_with_continual)")
             except Exception as e:
-                logger.error(f"Failed to load symspellpy-ko: {e}")
-                self.sym_spell = None
+                logger.error(f"Failed to load kiwipiepy: {e}")
+                self.kiwi = None
         else:
-            self.sym_spell = None
+            self.kiwi = None
+
+        # symspellpy-ko 초기화 (사용 가능한 경우) - kiwipiepy로 대체됨
+        # if SYMSPELL_AVAILABLE:
+        #     try:
+        #         self.sym_spell = KoSymSpell(max_dictionary_edit_distance=2, prefix_length=10)
+        #         self.sym_spell.load_korean_dictionary(decompose_korean=True, load_bigrams=False)
+        #         logger.info("✅ symspellpy-ko spell checker loaded successfully")
+        #     except Exception as e:
+        #         logger.error(f"Failed to load symspellpy-ko: {e}")
+        #         self.sym_spell = None
+        # else:
+        #     self.sym_spell = None
 
         # KSS는 lazy loading (fork 이슈 방지)
         # self._kss_splitter = Kss("split_sentences")
@@ -256,15 +277,15 @@ class TextPreprocessor:
         """반복 문자열 정규화"""
         # 1. 교차 패턴 먼저 처리: ㅋㅌㅋㅌ... → ㅋㅋ, ㅎㅌㅎㅌ → ㅎㅎ
         text = re.sub(r'(ㅋㅌ)+', 'ㅋㅋ', text)
-        text = re.sub(r'(ㅎㅌ)+', 'ㅎㅎ', text)
-        text = re.sub(r'(ㅋㅎ)+', 'ㅋㅋ', text)
+        # text = re.sub(r'(ㅎㅌ)+', 'ㅎㅎ', text)
+        # text = re.sub(r'(ㅋㅎ)+', 'ㅋㅋ', text)
 
         # 2. 자음/모음 반복: ㅋㅋㅋㅋ... → ㅋㅋ, ㅎㅎㅎㅎ → ㅎㅎ (3개 이상 → 2개)
         text = re.sub(r'([ㄱ-ㅎㅏ-ㅣ])\1{2,}', r'\1\1', text)
 
-        # 3. 특수문자 반복: !!! → !!, ??? → ??, .... → ...
+        # 3. 특수문자 반복: !!! → !!, ??? → ??, .... → .., ~~~~ → ~~
         text = re.sub(r'([!?])\1{2,}', r'\1\1', text)
-        text = re.sub(r'(\.\.\.\.+)', '...', text)
+        text = re.sub(r'(\.\.\.\.+)', '..', text)
         text = re.sub(r'([~])\1{2,}', r'\1\1', text)
 
         # 4. 같은 단어/문구 반복: "노노노노" → "노노", "아아아" → "아아"
@@ -277,15 +298,60 @@ class TextPreprocessor:
         # 6. 영어 문자 반복: aaaaa → aa, hahaha → haha (4개 이상 → 2개)
         text = re.sub(r'([a-zA-Z])\1{3,}', r'\1\1', text)
 
-        # 7. 숫자 반복: 1111111 → 11, 000000 → 00 (4개 이상 → 2개)
-        text = re.sub(r'(\d)\1{3,}', r'\1\1', text)
+        # 7. 숫자 반복: 1111111 → 11, 000000 → 00 (4개 이상 → 2개) - 아리까리 함.
+        # text = re.sub(r'(\d)\1{3,}', r'\1\1', text)
 
         return text
 
-    def remove_emoticons(self, text: str) -> str:
-        """이모티콘 문자열 제거 (/웃음/, /오이루/ 등)"""
-        text = re.sub(r'/[^/]+/', '', text)
-        return text
+    def remove_emoticons(self, text: str) -> tuple[str, list]:
+        """
+        이모티콘 문자열 제거 및 위치 정보 저장 (/웃음/, /오이루/ 등)
+
+        Returns:
+            (cleaned_text, emoticon_info_list)
+            emoticon_info_list: [('start'/'end', emoticon_text), ...]
+        """
+        emoticon_pattern = re.compile(r'/[^/]+/')
+        emoticons = []
+        text_length = len(text)
+        midpoint = text_length / 2
+
+        for match in emoticon_pattern.finditer(text):
+            emoticon_text = match.group()
+            # 이모티콘이 텍스트 앞쪽 절반에 있으면 'start', 뒤쪽 절반에 있으면 'end'
+            position = 'start' if match.start() < midpoint else 'end'
+            emoticons.append((position, emoticon_text))
+
+        cleaned_text = emoticon_pattern.sub('', text)
+        return cleaned_text, emoticons
+
+    def restore_emoticons(self, text: str, emoticons: list) -> str:
+        """
+        이모티콘을 번역된 텍스트의 맨 앞 또는 맨 뒤에 복원
+
+        Args:
+            text: 번역된 텍스트
+            emoticons: [('start'/'end', emoticon_text), ...]
+
+        Returns:
+            이모티콘이 복원된 텍스트
+        """
+        if not emoticons:
+            return text
+
+        start_emoticons = []
+        end_emoticons = []
+
+        # 이모티콘을 위치별로 분류
+        for position, emoticon in emoticons:
+            if position == 'start':
+                start_emoticons.append(emoticon)
+            else:
+                end_emoticons.append(emoticon)
+
+        # 맨 앞에 있던 이모티콘들을 앞에 추가, 맨 뒤에 있던 이모티콘들을 뒤에 추가
+        result = ''.join(start_emoticons) + text + ''.join(end_emoticons)
+        return result
 
     def remove_special_patterns(self, text: str) -> str:
         """특수 패턴 제거"""
@@ -315,35 +381,58 @@ class TextPreprocessor:
         return self.profanity_regex.sub('***', text)
 
     def fix_typos(self, text: str) -> str:
-        """오타 및 맞춤법 교정 (symspell + 패턴)"""
-        # 1. symspellpy-ko로 단어 단위 교정
-        if self.sym_spell:
-            words = text.split()
-            corrected_words = []
+        """
+        오타 및 맞춤법 교정 (kiwipiepy)
 
-            for word in words:
-                # 한글만 포함된 단어만 검사
-                if re.search(r'[가-힣]', word):
-                    suggestions = self.sym_spell.lookup(
-                        word,
-                        verbosity=Verbosity.CLOSEST,
-                        max_edit_distance=2
-                    )
-                    if suggestions and suggestions[0].distance > 0:
-                        # 교정 제안이 있으면 적용
-                        corrected_words.append(suggestions[0].term)
-                    else:
-                        corrected_words.append(word)
+        kiwipiepy의 오타 교정 기능:
+        - basic: 기본 오타 (외않됀대? → 왜 안 되는대?)
+        - continual: 연철 오타 (사무시레서 → 사무실에서)
+        - lengthening: 장음화 (지이인짜 → 진짜)
+        """
+        if not self.kiwi:
+            return text
+
+        try:
+            # kiwipiepy로 형태소 분석 + 오타 교정
+            tokens = self.kiwi.tokenize(text)
+
+            if not tokens:
+                return text
+
+            # 원본 띄어쓰기를 유지하면서 교정된 형태소로 재조합
+            words = []
+            current_word_forms = [tokens[0].form]  # 교정된 형태소 저장
+            prev_end = tokens[0].start + tokens[0].len
+
+            for i in range(1, len(tokens)):
+                token = tokens[i]
+                curr_start = token.start
+
+                # 원본에 공백이 있으면 (위치가 떨어져 있으면) 어절 종료
+                if curr_start > prev_end:
+                    # 이전 어절 저장 (교정된 형태소들 결합)
+                    word = ''.join(current_word_forms)
+                    words.append(word)
+
+                    # 새 어절 시작
+                    current_word_forms = [token.form]
                 else:
-                    corrected_words.append(word)
+                    # 붙어있으면 현재 어절에 형태소 추가
+                    current_word_forms.append(token.form)
 
-            text = ' '.join(corrected_words)
+                prev_end = curr_start + token.len
 
-        # 2. 정규식 패턴으로 추가 교정 (사전에 오타로 등록된 것들)
-        for pattern, replacement in self.typo_patterns:
-            text = pattern.sub(replacement, text)
+            # 마지막 어절 저장
+            if current_word_forms:
+                word = ''.join(current_word_forms)
+                words.append(word)
 
-        return text
+            corrected_text = ' '.join(words)
+            return corrected_text
+
+        except Exception as e:
+            logger.warning(f"Typo correction failed with kiwipiepy: {e}")
+            return text
 
     def add_spacing(self, text: str) -> str:
         """
@@ -376,44 +465,50 @@ class TextPreprocessor:
         remove_emoticons: bool = True,
         fix_typos: bool = True,
         add_spacing: bool = True,  # PyKoSpacing 띄어쓰기 교정
-    ) -> tuple[str, bool, Optional[str]]:
+    ) -> tuple[str, bool, Optional[str], list]:
         """
         전체 전처리 파이프라인
 
         Returns:
-            (preprocessed_text, filtered, filter_reason)
+            (preprocessed_text, filtered, filter_reason, emoticons)
+            emoticons: [(position, emoticon_text), ...] 이모티콘 위치 정보
         """
         original = text
+        emoticons_info = []  # 이모티콘 정보 저장
 
         # 1. HTML 제거
         text = self.remove_html(text)
 
         # 2. 기본 필터링 체크 (너무 짧거나 길거나 특수문자만) - 50자이하
         if 50 < len(text.strip()) < 1:
-            return text, True, "Too short or long"
+            return text, True, "Too short or long", emoticons_info
 
         if re.match(r'^[^\w가-힣]+$', text):
-            return text, True, "Only special characters"
-        
-        # 3. 특수 패턴 제거
-        text = self.remove_special_patterns(text)
+            return text, True, "Only special characters", emoticons_info
 
-        # 4. 반복 문자열 정규화 (필터링 전에 먼저!)
+        # 3. 이모티콘 제거 및 위치 정보 저장
+        if remove_emoticons:
+            text, emoticons_info = self.remove_emoticons(text)
+
+        # 3-1. 이모티콘만 있는 경우 원본 그대로 반환 (번역 불필요)
+        if emoticons_info and len(text.strip()) == 0:
+            return original, True, "Only emoticons", emoticons_info
+
+        # 4. 특수 패턴 제거
+        # text = self.remove_special_patterns(text)
+
+        # 5. 반복 문자열 정규화 (필터링 전에 먼저!)
         if normalize_repeats:
             text = self.normalize_repeats(text)
-
-        # 5. 이모티콘 제거
-        if remove_emoticons:
-            text = self.remove_emoticons(text)
 
         # 6. 자음 축약어 확장 및 신조어 변환
         if expand_abbreviations:
             text = self.expand_abbreviations(text)
             text = self.expand_slang(text)
 
-        # 7. 오타 및 맞춤법 교정
-        # if fix_typos:
-        #     text = self.fix_typos(text)
+        # 7. 오타 및 맞춤법 교정 - 쓰읍 애매하긴해 할래말래할래말래
+        if fix_typos:
+            text = self.fix_typos(text)
 
         # 8. 띄어쓰기 교정 (PyKoSpacing)
         if add_spacing:
@@ -436,16 +531,16 @@ class TextPreprocessor:
 
         # 12. 전처리 후 너무 짧아진 경우
         if len(text) < 1:
-            return text, True, "Too short after preprocessing"
+            return text, True, "Too short after preprocessing", emoticons_info
 
         # 13. KSS로 문장 분리 + ||| 구분자로 연결
         try:
             sentences = kss.split_sentences(text)
             text = "|||".join(sentences)
             # logger.info(f"Preprocessed: '{original}' → '{text}' ({len(sentences)} sentences)")
-            
+
         except Exception as e:
             logger.warning(f"Sentence splitting failed: {e}, using original text")
             logger.info(f"Preprocessed: '{original}' → '{text}'")
 
-        return text, False, None
+        return text, False, None, emoticons_info

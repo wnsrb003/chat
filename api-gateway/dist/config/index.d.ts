@@ -1,30 +1,32 @@
 export declare const config: {
-    readonly env: string;
-    readonly port: number;
-    readonly grpcPort: number;
-    readonly redis: {
-        readonly host: string;
-        readonly port: number;
-        readonly password: string | undefined;
+    env: string;
+    port: number;
+    grpcPort: number;
+    redis: {
+        host: string;
+        port: number;
+        password: string | undefined;
     };
-    readonly queue: {
-        readonly name: string;
-        readonly maxJobs: number;
-        readonly timeout: number;
+    queue: {
+        name: string;
+        maxJobs: number;
+        timeout: number;
     };
-    readonly rateLimit: {
-        readonly windowMs: number;
-        readonly maxRequests: number;
+    rateLimit: {
+        windowMs: number;
+        maxRequests: number;
     };
-    readonly cors: {
-        readonly origin: string;
+    cors: {
+        origin: string;
     };
-    readonly logging: {
-        readonly level: string;
+    logging: {
+        level: string;
     };
-    readonly cacheService: {
-        readonly grpcUrl: string;
-        readonly timeout: number;
+    cacheService: {
+        protocol: "grpc" | "http";
+        grpcUrl: string;
+        httpUrl: string;
+        timeout: number;
     };
 };
 //# sourceMappingURL=index.d.ts.map

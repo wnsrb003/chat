@@ -2,6 +2,11 @@ import { Server } from "http";
 export declare class WebSocketService {
     private wss;
     private clients;
+    private wsConnectionCounter;
+    private wsTranslateRequestCounter;
+    private wsTranslationCompleteCounter;
+    private lastWsTranslateRequestRps;
+    private lastWsTranslationCompleteRps;
     constructor(server: Server);
     private setupWebSocketServer;
     private handleMessage;
@@ -11,5 +16,10 @@ export declare class WebSocketService {
     private processLanguageIndependentlyForWebSocket;
     broadcast(message: any): void;
     close(): void;
+    getRpsMetrics(): {
+        connections: number;
+        translateRequest: number;
+        translationComplete: number;
+    };
 }
 //# sourceMappingURL=websocket.service.d.ts.map
