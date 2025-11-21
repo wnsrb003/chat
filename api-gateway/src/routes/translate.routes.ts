@@ -16,8 +16,9 @@ export const setWebSocketService = (ws: any) => {
 
 // Validation schema
 const translateSchema = z.object({
-  text: z.string().min(1).max(5000),
-  targetLanguages: z.array(z.string()).min(1).max(10),
+  message: z.string().min(1).max(5000),
+  // targetLanguages: z.array(z.string()).min(1).max(10),
+  transLangCode: z.string().min(1).max(10),
   options: z
     .object({
       expandAbbreviations: z.boolean().optional().default(true),
@@ -101,13 +102,11 @@ router.post("/translate", async (req: Request, res: Response) => {
     const validatedData = translateSchema.parse(req.body);
     const jobId = randomUUID();
 
-    const startTime = performance.now();
-
     // Step 1: Add preprocessing job
     const job = await queueService.addJob({
       id: jobId,
-      text: validatedData.text,
-      targetLanguages: validatedData.targetLanguages,
+      text: validatedData.message,
+      targetLanguages: [validatedData.transLangCode],
       options: validatedData.options,
       createdAt: Date.now(),
     });
@@ -137,131 +136,97 @@ router.post("/translate", async (req: Request, res: Response) => {
       // Step 3: Check if filtered
       if (preprocessingResult.filtered) {
         const translations = {
-          en: preprocessingResult.original_text,
-          th: preprocessingResult.original_text,
-          "zh-CN": preprocessingResult.original_text,
-          "zh-TW": preprocessingResult.original_text,
+          translatedText: "",
+          detectedSourceLanguage: "",
         };
-        return res.json({
-          success: true,
+
+        translations.translatedText = preprocessingResult.original_text;
+        translations.detectedSourceLanguage =
+          preprocessingResult.detected_language;
+
+        const response = {
           data: {
-            id: jobId,
-            originalText: preprocessingResult.original_text,
-            preprocessedText: preprocessingResult.preprocessed_text,
-            translations,
-            detectedLanguage: preprocessingResult.detected_language,
-            cacheHits: false,
-            preprocessing_ms: preprocessingResult.preprocessing_time_ms,
-            translation_ms: -1,
-            total_ms: performance.now() - startTime,
-            filtered: preprocessingResult.filtered,
-            filterReason: preprocessingResult.filter_reason,
+            translations: [translations],
           },
-        });
+        };
+
+        return res.json([response]);
+      }
+
+      // 동일한 언어로 번역 요청
+      if (
+        preprocessingResult.detected_language === validatedData.transLangCode
+      ) {
+        const translations = {
+          translatedText: "",
+          detectedSourceLanguage: "",
+        };
+
+        translations.translatedText = preprocessingResult.preprocessed_text;
+        translations.detectedSourceLanguage =
+          preprocessingResult.detected_language;
+
+        const response = {
+          data: {
+            translations: [translations],
+          },
+        };
+
+        return res.json([response]);
       }
 
       // Step 4: Call gRPC for each language in parallel
-      const allTranslations: Record<string, object> = {};
-      let maxTranslationTime = 0;
+      const targetLang = validatedData.transLangCode;
+      try {
+        const grpcResult = await cacheService.translate({
+          text: preprocessingResult.preprocessed_text,
+          source_lang: preprocessingResult.detected_language,
+          target_langs: [targetLang], // 각 언어별로 개별 요청
+          use_cache: false,
+          cache_strategy: "hybrid",
+          translator_name: "vllm",
+        });
 
-      // 각 언어별로 병렬 처리
-      const translationPromises = validatedData.targetLanguages.map(
-        async (targetLang) => {
-          try {
-            const grpcResult = await cacheService.translate({
-              text: preprocessingResult.preprocessed_text,
-              source_lang: preprocessingResult.detected_language,
-              target_langs: [targetLang], // 각 언어별로 개별 요청
-              use_cache: false,
-              cache_strategy: "hybrid",
-              translator_name: "vllm",
-            });
+        if (grpcResult.translations[targetLang]) {
+          const translations = {
+            translatedText: "",
+            detectedSourceLanguage: "",
+          };
 
-            const langDuration = performance.now() - startTime;
-            maxTranslationTime = Math.max(maxTranslationTime, langDuration);
+          translations.translatedText = grpcResult.translations[targetLang];
+          translations.detectedSourceLanguage =
+            preprocessingResult.detected_language;
 
-            if (grpcResult.translations[targetLang]) {
-              allTranslations[targetLang] = {
-                id: jobId,
-                language: targetLang,
-                translation: grpcResult.translations[targetLang],
-                cache_hit: grpcResult.cache_hits[targetLang] || false,
-                originalText: preprocessingResult.original_text,
-                preprocessedText: preprocessingResult.preprocessed_text,
-                detectedLanguage: preprocessingResult.detected_language,
-                total_ms: langDuration,
-                preprocessing_ms: preprocessingResult.preprocessing_time_ms,
-                cache_processing_ms: grpcResult.processing_time_ms,
-                cache_lookup_time_ms: grpcResult.cache_lookup_time_ms || -1,
-                llm_response_time_ms: grpcResult.llm_response_time_ms || -1,
-                filtered: preprocessingResult.filtered,
-                filter_reason: preprocessingResult.filter_reason,
-              };
+          const response = {
+            data: {
+              translations: [translations],
+            },
+          };
 
-              // allTranslations[targetLang].originalText =
-              //   preprocessingResult.original_text;
-              // allTranslations[targetLang] = grpcResult.translations[targetLang];
-              // allCacheHits[targetLang] =
-              //   grpcResult.cache_hits[targetLang] || false;
-              // cacheTimings[targetLang] = grpcResult.cache_lookup_time_ms || -1;
-              // llmTimings[targetLang] = grpcResult.llm_response_time_ms || -1;
-              // cacheTotalTimings[targetLang] =
-              //   grpcResult.processing_time_ms || -1;
-            }
-          } catch (error) {
-            logger.error(
-              { error, targetLang },
-              `Translation failed for ${targetLang}`
-            );
-            // 실패한 언어는 빈 문자열로 처리
-            allTranslations[targetLang] = {};
-          }
+          return res.json([response]);
         }
-      );
-
-      // 모든 언어 번역 완료 대기
-      await Promise.all(translationPromises);
-
-      // logger.info({ // CPU 최적화
-      //   msg: "Translation completed (parallel)",
-      //   jobId,
-      //   preprocessingTime: preprocessingResult.preprocessing_time_ms,
-      //   maxTranslationTime: maxTranslationTime,
-      //   totalTime: totalDuration,
-      //   languageCount: validatedData.targetLanguages.length,
-      // });
-
-      // Step 5: Return result
-      return res.json({
-        success: true,
-        // data: {
-        //   id: jobId,
-        //   originalText: preprocessingResult.original_text,
-        //   preprocessedText: preprocessingResult.preprocessed_text,
-        //   translations: allTranslations,
-        //   detectedLanguage: preprocessingResult.detected_language,
-        //   cacheHits: allCacheHits,
-        //   timings: {
-        //     preprocessing_ms: preprocessingResult.preprocessing_time_ms,
-        //     total_ms: totalDuration,
-        //   },
-        //   cacheTimings: { cacheTotalTimings, cacheTimings, llmTimings },
-        //   filtered: false,
-        //   filter_reason: "",
-        // },
-        data: allTranslations,
-      });
+        // 실패한 건? - 빈 배열로 처리
+        return res.json([]);
+      } catch (error) {
+        logger.error(
+          { error, targetLang },
+          `Translation failed for ${targetLang}`
+        );
+        // 실패한 언어는 빈 문자열로 처리
+        logger.error({ error, jobId }, "Translation Request failed");
+        return res.json([]);
+      }
     } catch (error) {
       logger.error({ error, jobId }, "Translation job failed");
-      return res.status(408).json({
-        success: false,
-        error: "Translation failed",
-        jobId,
-        message: error instanceof Error ? error.message : "Unknown error",
-      });
+      return res.json([]);
     }
   } catch (error) {
     if (error instanceof z.ZodError) {
+      logger.error(
+        { error: error?.errors },
+        "Translation Request Validation failed"
+      );
+
       return res.status(400).json({
         success: false,
         error: "Validation error",
@@ -269,7 +234,7 @@ router.post("/translate", async (req: Request, res: Response) => {
       });
     }
 
-    logger.error({ error }, "Translation request failed");
+    logger.error({ error }, "Translation Error");
     return res.status(500).json({
       success: false,
       error: "Internal server error",
