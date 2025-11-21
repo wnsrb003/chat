@@ -68,9 +68,9 @@ def process_bull_job(job_id: str, job_data: dict) -> dict:
             return None
 
         # 2. 언어 감지
-        detected_lang = preprocessor.detect_language(preprocessed_text)
-        if not detected_lang:
-            detected_lang = "ko"  # 기본값
+        # detected_lang = preprocessor.detect_language(preprocessed_text)
+        # if not detected_lang:
+        #     detected_lang = "ko"  # 기본값
 
         processing_time = (time.time() - start_time) * 1000  # ms
 
@@ -78,7 +78,7 @@ def process_bull_job(job_id: str, job_data: dict) -> dict:
         result = {
             "original_text": job.text,
             "preprocessed_text": preprocessed_text,
-            "detected_language": detected_lang,
+            # "detected_language": detected_lang,
             "preprocessing_time_ms": processing_time,
             "filtered": filtered,
             "filter_reason": filter_reason if filtered else None,

@@ -5,6 +5,7 @@ import { queueService } from "./queue.service";
 import { cacheService } from "./cache.service";
 import { logger } from "../utils/logger";
 import { randomUUID } from "crypto";
+import { detectLanguage } from "./language-detector.service";
 
 const wsMessageSchema = z.object({
   type: z.enum(["translate", "ping"]),
@@ -215,6 +216,8 @@ export class WebSocketService {
         jobId
       );
 
+      const detectedLanguage = detectLanguage(text);
+
       if (preprocessingResult.filtered) {
         const exceptionDuration = performance.now() - startTime;
         logger.warn({ jobId, targetLang }, "Text filtered in preprocessing");
@@ -246,7 +249,7 @@ export class WebSocketService {
                 // XLSX 로깅용 추가 정보
                 originalText: preprocessingResult.original_text,
                 preprocessedText: preprocessingResult.preprocessed_text,
-                detectedLanguage: preprocessingResult.detected_language,
+                detectedLanguage: detectedLanguage,
                 total_ms: exceptionDuration,
                 preprocessing_ms: preprocessingResult.preprocessing_time_ms,
                 cache_processing_ms: -1,
@@ -287,10 +290,9 @@ export class WebSocketService {
       //   filtered: false,
       //   filter_reason: "",
       // };
-
       const grpcResult = await cacheService.translate({
         text: preprocessingResult.preprocessed_text,
-        source_lang: preprocessingResult.detected_language,
+        source_lang: detectedLanguage,
         // text: text,
         // source_lang: "ko",
         target_langs: [targetLang],
@@ -330,7 +332,7 @@ export class WebSocketService {
                 // XLSX 로깅용 추가 정보
                 originalText: preprocessingResult.original_text,
                 preprocessedText: preprocessingResult.preprocessed_text,
-                detectedLanguage: preprocessingResult.detected_language,
+                detectedLanguage: detectedLanguage,
                 total_ms: totalDuration,
                 preprocessing_ms: preprocessingResult.preprocessing_time_ms,
                 cache_processing_ms: grpcResult.processing_time_ms,

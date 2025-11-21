@@ -32,7 +32,7 @@ export interface TranslationResult {
 export interface PreprocessingResult {
   original_text: string;
   preprocessed_text: string;
-  detected_language: string;
+  // detected_language: string;
   preprocessing_time_ms: number;
   filtered: boolean;
   filter_reason?: string;
@@ -227,7 +227,7 @@ class QueueService {
             const failedResult: PreprocessingResult = {
               original_text: "",
               preprocessed_text: "",
-              detected_language: "unknown",
+              // detected_language: "unknown",
               preprocessing_time_ms: 0,
               filtered: true,
               filter_reason: result?.filter_reason || "Preprocessing failed",

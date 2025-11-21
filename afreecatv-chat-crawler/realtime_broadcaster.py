@@ -17,7 +17,7 @@ class RealtimeBroadcaster:
         self,
         afreeca_url: str,
         broadcast_api_url: str = "http://localhost:3000/api/v1/broadcast",
-        target_languages: list = ["en"],
+        target_languages: list = None,
         translation_options: Optional[dict] = None,
         max_queue_size: int = 100,
         debug: bool = False,
@@ -27,7 +27,7 @@ class RealtimeBroadcaster:
         Args:
             afreeca_url: AfreecaTV 방송 URL
             broadcast_api_url: 브로드캐스트 API 엔드포인트
-            target_languages: 번역할 언어 목록
+            target_languages: 번역할 언어 코드 리스트
             translation_options: 번역 옵션
             max_queue_size: 번역 큐 최대 크기
             debug: 디버그 모드
@@ -35,7 +35,7 @@ class RealtimeBroadcaster:
         """
         self.afreeca_url = afreeca_url
         self.broadcast_api_url = broadcast_api_url
-        self.target_languages = target_languages
+        self.target_languages = target_languages or ["en"]
         self.translation_options = translation_options or {
             "expandAbbreviations": True,
             "normalizeRepeats": True,
@@ -117,12 +117,20 @@ class RealtimeBroadcaster:
             pass  # CPU 최적화: 에러 로그 제거
 
     async def translate_and_broadcast(self, message: ChatMessage):
-        """개별 메시지를 번역하고 브로드캐스트 (병렬 처리)"""
+        """개별 메시지를 번역하고 브로드캐스트 (각 언어별 병렬 처리)"""
+        # 각 언어별로 번역 요청 병렬 실행
+        tasks = [
+            self._translate_single_lang(message, lang)
+            for lang in self.target_languages
+        ]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _translate_single_lang(self, message: ChatMessage, lang: str):
+        """단일 언어로 번역 요청"""
         try:
-            # 번역 API 호출 (브로드캐스트)
             payload = {
-                "text": message.comment,
-                "targetLanguages": self.target_languages,
+                "message": message.comment,
+                "transLangCode": lang,
                 "options": self.translation_options,
                 "metadata": {
                     "message_id": f"{message.timestamp}_{message.user_id}",
@@ -130,27 +138,24 @@ class RealtimeBroadcaster:
                     "userId": message.user_id,
                     "platform": "afreecatv",
                     "timestamp": message.timestamp,
-                    **self.broadcast_metadata  # 방송 메타데이터 추가
+                    **self.broadcast_metadata
                 }
             }
 
-            # 재사용 가능한 세션으로 POST (CPU 최적화: start_time 제거)
             async with self.session.post(
                 self.broadcast_api_url,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=3)  # 3초 (큐 대기 시간 고려)
+                timeout=aiohttp.ClientTimeout(total=3)
             ) as response:
                 if response.status == 200 or response.status == 202:
                     result = await response.json()
 
                     if result.get("success"):
                         self.stats["total_broadcasted"] += 1
-                        # CPU 최적화: elapsed, 디버그 로그 제거
-
                     else:
-                        print(f"⚠️  브로드캐스트 실패: {result.get('error', 'Unknown')}")
+                        print(f"⚠️  브로드캐스트 실패 ({lang}): {result.get('error', 'Unknown')}")
                 else:
-                    print(f"⚠️  API 오류: HTTP {response.status}")
+                    print(f"⚠️  API 오류 ({lang}): HTTP {response.status}")
 
         except asyncio.CancelledError:
             pass

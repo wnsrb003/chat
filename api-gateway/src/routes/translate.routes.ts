@@ -5,6 +5,7 @@ import { cacheService } from "../services/cache.service";
 import { logger } from "../utils/logger";
 import { randomUUID } from "crypto";
 import { getHttpRps } from "../index";
+import { detectLanguage } from "../services/language-detector.service";
 
 const router = Router();
 
@@ -126,6 +127,8 @@ router.post("/translate", async (req: Request, res: Response) => {
       });
     }
 
+    const detectedLanguage = detectLanguage(validatedData.message);
+
     // Sync mode: wait for preprocessing, then call gRPC
     try {
       // Step 2: Wait for preprocessing result from Python worker
@@ -141,8 +144,7 @@ router.post("/translate", async (req: Request, res: Response) => {
         };
 
         translations.translatedText = preprocessingResult.original_text;
-        translations.detectedSourceLanguage =
-          preprocessingResult.detected_language;
+        translations.detectedSourceLanguage = detectedLanguage;
 
         const response = {
           data: {
@@ -154,17 +156,14 @@ router.post("/translate", async (req: Request, res: Response) => {
       }
 
       // 동일한 언어로 번역 요청
-      if (
-        preprocessingResult.detected_language === validatedData.transLangCode
-      ) {
+      if (detectedLanguage === validatedData.transLangCode) {
         const translations = {
           translatedText: "",
           detectedSourceLanguage: "",
         };
 
         translations.translatedText = preprocessingResult.preprocessed_text;
-        translations.detectedSourceLanguage =
-          preprocessingResult.detected_language;
+        translations.detectedSourceLanguage = detectedLanguage;
 
         const response = {
           data: {
@@ -180,7 +179,7 @@ router.post("/translate", async (req: Request, res: Response) => {
       try {
         const grpcResult = await cacheService.translate({
           text: preprocessingResult.preprocessed_text,
-          source_lang: preprocessingResult.detected_language,
+          source_lang: detectedLanguage,
           target_langs: [targetLang], // 각 언어별로 개별 요청
           use_cache: false,
           cache_strategy: "hybrid",
@@ -194,8 +193,7 @@ router.post("/translate", async (req: Request, res: Response) => {
           };
 
           translations.translatedText = grpcResult.translations[targetLang];
-          translations.detectedSourceLanguage =
-            preprocessingResult.detected_language;
+          translations.detectedSourceLanguage = detectedLanguage;
 
           const response = {
             data: {
@@ -217,6 +215,8 @@ router.post("/translate", async (req: Request, res: Response) => {
         return res.json([]);
       }
     } catch (error) {
+      console.log(error, "@@");
+
       logger.error({ error, jobId }, "Translation job failed");
       return res.json([]);
     }
@@ -614,6 +614,7 @@ async function processLanguageIndependently(
   const startTime = performance.now();
 
   try {
+    const detectedLanguage = detectLanguage(text);
     // Step 1: 전처리 (각 언어마다 독립적으로)
     await queueService.addJob({
       id: jobId,
@@ -653,7 +654,7 @@ async function processLanguageIndependently(
             // XLSX 로깅용 추가 정보
             originalText: preprocessingResult.original_text,
             preprocessedText: preprocessingResult.preprocessed_text,
-            detectedLanguage: preprocessingResult.detected_language,
+            detectedLanguage: detectedLanguage,
             gateway_preprocessing_time_ms: gateway_preprocessing_time_ms,
             preprocessing_ms: preprocessingResult.preprocessing_time_ms,
             cache_processing_ms: -1,
@@ -688,7 +689,7 @@ async function processLanguageIndependently(
     // Step 4: 번역 (단일 언어)
     const grpcResult = await cacheService.translate({
       text: preprocessingResult.preprocessed_text,
-      source_lang: preprocessingResult.detected_language,
+      source_lang: detectedLanguage,
       target_langs: [targetLang],
       use_cache: false,
       cache_strategy: "hybrid",
@@ -711,7 +712,7 @@ async function processLanguageIndependently(
             // XLSX 로깅용 추가 정보
             originalText: preprocessingResult.original_text,
             preprocessedText: preprocessingResult.preprocessed_text,
-            detectedLanguage: preprocessingResult.detected_language,
+            detectedLanguage: detectedLanguage,
             gateway_preprocessing_time_ms: gateway_preprocessing_time_ms,
             preprocessing_ms: preprocessingResult.preprocessing_time_ms,
             cache_processing_ms: grpcResult.processing_time_ms,
@@ -757,23 +758,24 @@ router.post("/broadcast", async (req: Request, res: Response) => {
     // );
 
     // 각 언어를 완전히 독립적으로 처리 (fire-and-forget)
-    validatedData.targetLanguages.forEach((targetLang) => {
-      processLanguageIndependently(
-        validatedData.text,
-        targetLang,
-        validatedData.options,
-        metadata
-      ).catch((error) => {
-        logger.error({ error, targetLang }, "Background processing error");
-      });
+    // validatedData.targetLanguages.forEach((targetLang) => {
+    const targetLang = validatedData.transLangCode;
+    processLanguageIndependently(
+      validatedData.message,
+      targetLang,
+      validatedData.options,
+      metadata
+    ).catch((error) => {
+      logger.error({ error, targetLang }, "Background processing error");
     });
+    // });
 
     // 즉시 202 Accepted 응답 반환
     return res.status(202).json({
       success: true,
       message: "Translation jobs started",
-      languageCount: validatedData.targetLanguages.length,
-      languages: validatedData.targetLanguages,
+      languageCount: 1,
+      languages: targetLang,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
